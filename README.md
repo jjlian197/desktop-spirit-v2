@@ -83,30 +83,60 @@ See [docs/API.md](docs/API.md) for full API documentation and [docs/EXPRESSIONS.
 
 ```
 sherry-desktop-sprite/
-├── src/
+├── src/                        # Main source code
 │   ├── main.py                 # Entry point
 │   ├── app.py                  # Main application
-│   ├── core/
+│   ├── core/                   # Core modules
 │   │   ├── sprite_window.py    # PyQt6 transparent window
 │   │   ├── live2d_view.py      # Live2D renderer
-│   │   └── websocket_server.py # WebSocket control
-│   ├── ui/
+│   │   ├── websocket_server.py # WebSocket control
+│   │   ├── tts_manager.py      # Text-to-speech
+│   │   └── lip_sync_websocket.py # Lip sync
+│   ├── brain/                  # 🧠 AI & Intelligence
+│   │   └── sprite_brain.py     # Autonomous behavior system
+│   ├── ui/                     # UI components
 │   │   └── bubble_widget.py    # Message bubbles
-│   └── utils/
-│       └── logger.py           # Logging setup
-├── launchd/
-│   └── com.sherry.sprite.plist # macOS service config
-├── scripts/
+│   ├── utils/                  # Utilities
+│   │   └── logger.py           # Logging setup
+│   └── assets/models/          # Live2D models
+│       └── hanamaru/           # Default catgirl model
+├── mouse_follow/               # 🖱️ Mouse tracking system
+│   ├── mouse_follow_ctl.py     # Control script
+│   ├── mouse_tracker.py        # Tracking logic
+│   ├── mouse_follow.sh         # Shell wrapper
+│   └── config.json             # Configuration
+├── tools/                      # 🛠️ Development tools
+│   ├── param_checkers/         # Model parameter tools
+│   │   ├── check_original_model_params.py
+│   │   ├── detail_check.py
+│   │   ├── list_params.py
+│   │   └── quick_check_params.py
+│   └── tests/                  # Test scripts
+│       ├── test_live2d.py
+│       ├── test_minimal.py
+│       ├── test_param_direct.py
+│       ├── test_watermark_removal.py
+│       ├── test_websocket_control.py
+│       └── verify.py           # Dependency checker
+├── scripts/                    # Utility scripts
 │   ├── install.sh              # One-click installer
-│   └── uninstall.sh            # Uninstall script
-├── tests/
-│   └── test_client.py          # WebSocket test client
-├── docs/
-│   ├── API.md                  # API documentation
+│   ├── uninstall.sh            # Uninstall script
+│   └── remove_watermark.py     # Watermark removal
+├── launchd/                    # macOS service config
+│   └── com.sherry.sprite.plist
+├── docs/                       # Documentation
+│   ├── API.md                  # API reference
 │   ├── DEPLOY.md               # Deployment guide
-│   └── MODELS.md               # Live2D model setup
-├── requirements.txt
-└── config.yaml
+│   ├── MODELS.md               # Model setup
+│   ├── EXPRESSIONS.md          # Expression list
+│   ├── BODY_PARAMETERS.md      # Body parameter reference
+│   ├── MOUSE_FOLLOW_GUIDE.md   # Mouse follow tutorial
+│   ├── SPRITE_BRAIN_GUIDE.md   # Brain system guide
+│   └── APPLE_SILICON_FIX.md    # Apple Silicon notes
+├── tests/                      # Test client
+│   └── test_client.py
+├── config.yaml                 # Main configuration
+└── requirements.txt            # Python dependencies
 ```
 
 ## 🎨 Live2D Models
