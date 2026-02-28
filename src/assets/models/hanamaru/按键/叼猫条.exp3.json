@@ -1,0 +1,45 @@
+{
+    "Type": "Live2D Expression",
+    "Parameters": [
+        {
+            "Id": "Key18",
+            "Value": 1.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamMouthForm",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamMouthOpenY",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamTongueOut",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamMouthPuckerWiden",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamMouthX",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamCheekPuff",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "ParamMouthPressLipOpen3",
+            "Value": 0.0,
+            "Blend": "Add"
+        }
+    ]
+}

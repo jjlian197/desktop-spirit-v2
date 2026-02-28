@@ -1,0 +1,32 @@
+# Sprite configuration
+sprite:
+  name: "Sherry"
+  window:
+    width: 400
+    height: 600
+    opacity: 1.0
+    always_on_top: true
+    frameless: true
+    transparent: true
+  
+  # Starting position (center of screen if null)
+  position:
+    x: null
+    y: null
+  
+  # Live2D model path
+  model:
+    path: "src/assets/models/hanamaru"
+    default_expression: "normal"
+    
+# WebSocket server
+websocket:
+  host: "127.0.0.1"
+  port: 8765
+  
+# Logging
+logging:
+  level: "INFO"
+  file: "~/.sherry/sprite.log"
+  max_size: "10MB"
+  backup_count: 5

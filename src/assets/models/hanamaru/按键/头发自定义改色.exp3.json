@@ -1,0 +1,35 @@
+{
+    "Type": "Live2D Expression",
+    "Parameters": [
+        {
+            "Id": "Open_EyeMask4",
+            "Value": -1.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "Key2",
+            "Value": 1.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "Key45",
+            "Value": 0.600738525390625,
+            "Blend": "Add"
+        },
+        {
+            "Id": "Key46",
+            "Value": 0.1694396734237671,
+            "Blend": "Add"
+        },
+        {
+            "Id": "Key47",
+            "Value": 0.3042733073234558,
+            "Blend": "Add"
+        },
+        {
+            "Id": "Key48",
+            "Value": 0.0,
+            "Blend": "Add"
+        }
+    ]
+}

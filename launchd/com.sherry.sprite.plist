@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" 
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sherry.sprite</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>/Users/mylianjie/.openclaw/workspace/projects/sherry-desktop-sprite/src/main.py</string>
+    </array>
+    
+    <!-- KeepAlive - restart on crash or non-zero exit -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    
+    <!-- Restart interval in seconds -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    
+    <!-- Standard output and error logs -->
+    <key>StandardOutPath</key>
+    <string>/Users/mylianjie/.sherry/sprite.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/Users/mylianjie/.sherry/sprite.error.log</string>
+    
+    <!-- Start on user login -->
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <!-- Run in user session -->
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>Aqua</string>
+        <string>Background</string>
+    </array>
+    
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>/Users/mylianjie/.openclaw/workspace/projects/sherry-desktop-sprite</string>
+        <key>SHERRY_HOME</key>
+        <string>/Users/mylianjie/.sherry</string>
+    </dict>
+</dict>
+</plist>

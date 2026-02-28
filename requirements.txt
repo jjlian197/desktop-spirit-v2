@@ -1,0 +1,24 @@
+# GUI
+PyQt6>=6.4.0
+PyQt6-Qt6>=6.4.0
+
+# Live2D
+live2d-py>=0.4.0
+
+# WebSocket
+websockets>=11.0
+aiohttp>=3.8.0
+
+# TTS
+pyttsx3>=2.90
+
+# Utilities
+pyyaml>=6.0
+psutil>=5.9.0
+watchdog>=3.0.0
+
+# Logging
+loguru>=0.7.0
+
+# macOS Native Window Level Support (optional, for advanced always-on-top)
+pyobjc>=9.0; sys_platform == 'darwin'

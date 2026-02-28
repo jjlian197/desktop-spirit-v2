@@ -1,0 +1,1 @@
+# Sherry Desktop Sprite - Source Package
