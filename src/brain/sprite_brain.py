@@ -35,22 +35,58 @@ class SpriteBrain:
         self.mood = MoodEngine()
         self.soul = SherrySoul()
         
-        # 鼠标跟随配置
+        # 鼠标跟随配置 - V2: 增强版大角度头部+身体跟随
         self.mouse_config = {
             "enabled": True,
-            "head_sensitivity": 0.5,
-            "eye_sensitivity": 1.0,
-            "smooth_factor": 0.15,
-            "dead_zone": 0.1,
+            # 头部灵敏度 (0-1, 推荐 0.6-0.9 获得更大角度)
+            "head_sensitivity": 0.8,
+            # 身体灵敏度 (0-1, 推荐 0.4-0.7 身体跟随头部)
+            "body_sensitivity": 0.6,
+            # 眼神灵敏度 (0-1, 推荐 1.0-1.5 更灵动的眼神)
+            "eye_sensitivity": 1.2,
+            # 平滑系数 (0-1, 越小越平滑但越慢)
+            "smooth_factor": 0.12,
+            # 死区 (0-0.3, 中心不响应区域)
+            "dead_zone": 0.08,
+            # 头部最大角度 (默认30, 可增大到 45-60)
+            "head_max_angle": 75,
+            # 身体最大角度 (默认20, 可增大到 30-40)
+            "body_max_angle": 30,
+            # 眼神最大偏移 (默认1.0, 可增大到 1.2-1.5)
+            "eye_max_offset": 1.5,
+            # 🚨 基础偏移补偿 (如果模型有固有偏移，可调整这些值)
+            "offset_angle_x": 0.0,      # 头部左右偏移补偿
+            "offset_angle_y": -15.0,      # 头部上下偏移补偿
+            "offset_body_x": 5.0,       # 身体左右偏移补偿
+            "offset_eye_x": 0.3,        # 眼球左右偏移补偿
+            "offset_eye_y": -0.2,        # 眼球上下偏移补偿
         }
         
+        # 当前参数值 (平滑后的实际值)
         self.current_params = {
-            "ParamAngleX": 0.0, "ParamAngleY": 0.0,
-            "ParamEyeBallX": 0.0, "ParamEyeBallY": 0.0,
+            # 头部旋转
+            "ParamAngleX": 0.0,   # 头部左右 -30~30 (增强后 -45~45)
+            "ParamAngleY": 0.0,   # 头部上下 -30~30
+            "ParamAngleZ": 0.0,   # 头部倾斜 -30~30
+            # 身体旋转
+            "ParamBodyAngleX": 0.0,  # 身体左右 -30~30
+            "ParamBodyAngleY": 0.0,  # 身体前后 -30~30
+            "ParamBodyAngleZ": 0.0,  # 身体侧倾 -30~30
+            # 眼球
+            "ParamEyeBallX": 0.0,    # 眼球左右 -1.0~1.0
+            "ParamEyeBallY": 0.0,    # 眼球上下 -1.0~1.0
         }
+        
+        # 目标参数值 (鼠标位置计算的目标值)
         self.target_params = {
-            "ParamAngleX": 0.0, "ParamAngleY": 0.0,
-            "ParamEyeBallX": 0.0, "ParamEyeBallY": 0.0,
+            "ParamAngleX": 0.0,
+            "ParamAngleY": 0.0,
+            "ParamAngleZ": 0.0,
+            "ParamBodyAngleX": 0.0,
+            "ParamBodyAngleY": 0.0,
+            "ParamBodyAngleZ": 0.0,
+            "ParamEyeBallX": 0.0,
+            "ParamEyeBallY": 0.0,
         }
         
         try:
@@ -74,6 +110,9 @@ class SpriteBrain:
                     self.ws = ws
                     retry_count = 0  # 重置重连计数
                     logger.info("✅ 已连接到精灵大脑神经中枢！")
+                    
+                    # 🚨 连接成功后，先重置所有参数让模型看向正前方
+                    await self._reset_to_center()
                     
                     # 创建任务
                     brain_task = asyncio.create_task(self._brain_loop())
@@ -128,6 +167,25 @@ class SpriteBrain:
 
     async def set_expression(self, expression_name: str):
         return await self.send_command("expression", {"name": expression_name})
+    
+    async def _reset_to_center(self):
+        """🚨 重置所有参数，让模型看向正前方"""
+        logger.info("🎯 重置模型姿态，看向正前方...")
+        
+        # 重置目标参数为0
+        for k in self.target_params:
+            self.target_params[k] = 0.0
+            self.current_params[k] = 0.0
+        
+        # 发送重置命令
+        reset_params = {k: 0.0 for k in self.current_params}
+        await self.send_command("parameter_batch", {"params": reset_params})
+        
+        # 再发送一次确保生效
+        await asyncio.sleep(0.1)
+        await self.send_command("parameter_batch", {"params": reset_params})
+        
+        logger.info("✅ 模型已复位到正前方")
 
     async def speak(self, text: str):
         return await self.send_command("speak", {"text": text})
@@ -327,35 +385,65 @@ class SpriteBrain:
         return norm_x, norm_y
 
     async def _mouse_follow_loop(self):
-        """鼠标跟随主循环 - 15fps，批量发送参数"""
+        """鼠标跟随主循环 V2 - 大角度头部+身体跟随，30fps批量发送"""
         while self.running and self.ws:
             if not self.mouse_config["enabled"]:
                 await asyncio.sleep(1)
                 continue
             
             mx, my = self.get_mouse_position()
-            # 死区处理
+            
+            # === 死区处理 ===
             dz = self.mouse_config["dead_zone"]
-            mx = 0 if abs(mx) < dz else (mx-dz)/(1-dz) if mx > 0 else (mx+dz)/(1-dz)
-            my = 0 if abs(my) < dz else (my-dz)/(1-dz) if my > 0 else (my+dz)/(1-dz)
+            if abs(mx) < dz:
+                mx = 0.0
+            else:
+                mx = (abs(mx) - dz) / (1 - dz) * (1 if mx > 0 else -1)
+            if abs(my) < dz:
+                my = 0.0
+            else:
+                my = (abs(my) - dz) / (1 - dz) * (1 if my > 0 else -1)
             
-            self.target_params["ParamAngleX"] = mx * 30 * self.mouse_config["head_sensitivity"]
-            self.target_params["ParamAngleY"] = my * 30 * self.mouse_config["head_sensitivity"]
-            self.target_params["ParamEyeBallX"] = mx * 1.0 * self.mouse_config["eye_sensitivity"]
-            self.target_params["ParamEyeBallY"] = my * 1.0 * self.mouse_config["eye_sensitivity"]
+            cfg = self.mouse_config
+            head_max = cfg["head_max_angle"]
+            body_max = cfg["body_max_angle"]
+            eye_max = cfg["eye_max_offset"]
             
-            # 平滑更新
-            sf = self.mouse_config["smooth_factor"]
+            # === 头部跟随 (更大角度) ===
+            # 头部左右旋转 - 主跟随 + 偏移补偿
+            self.target_params["ParamAngleX"] = mx * head_max * cfg["head_sensitivity"] + cfg.get("offset_angle_x", 0.0)
+            # 头部上下旋转 + 偏移补偿
+            self.target_params["ParamAngleY"] = my * head_max * cfg["head_sensitivity"] + cfg.get("offset_angle_y", 0.0)
+            # 头部倾斜 - 随左右移动轻微倾斜增加自然感
+            self.target_params["ParamAngleZ"] = mx * head_max * 0.3 * cfg["head_sensitivity"]
+            
+            # === 身体跟随 (延迟于头部，增加层次感) ===
+            # 身体左右旋转 - 跟随头部但幅度较小 + 偏移补偿
+            self.target_params["ParamBodyAngleX"] = mx * body_max * cfg["body_sensitivity"] + cfg.get("offset_body_x", 0.0)
+            # 身体前后倾斜 - 随上下移动
+            self.target_params["ParamBodyAngleY"] = my * body_max * 0.5 * cfg["body_sensitivity"]
+            # 身体侧倾 - 与头部同向但幅度更小
+            self.target_params["ParamBodyAngleZ"] = mx * body_max * 0.4 * cfg["body_sensitivity"]
+            
+            # === 眼神跟随 (最灵活) ===
+            # 眼球可以比头部更灵活，看向鼠标位置 + 偏移补偿
+            self.target_params["ParamEyeBallX"] = mx * eye_max * cfg["eye_sensitivity"] + cfg.get("offset_eye_x", 0.0)
+            self.target_params["ParamEyeBallY"] = my * eye_max * cfg["eye_sensitivity"] + cfg.get("offset_eye_y", 0.0)
+            
+            # === 平滑插值更新 ===
+            sf = cfg["smooth_factor"]
             params_batch = {}
-            for k in self.current_params:
-                self.current_params[k] += (self.target_params[k] - self.current_params[k]) * sf
-                params_batch[k] = round(self.current_params[k], 3)
             
-            # 批量发送所有参数
+            for k in self.current_params:
+                # 线性插值: current = current + (target - current) * factor
+                self.current_params[k] += (self.target_params[k] - self.current_params[k]) * sf
+                params_batch[k] = round(self.current_params[k], 4)
+            
+            # 批量发送所有参数到 Live2D
             await self.send_command("parameter_batch", {"params": params_batch})
             
-            # 15fps = 66ms 间隔
-            await asyncio.sleep(1/15)
+            # 30fps = 33ms 间隔 (~0.033s)
+            await asyncio.sleep(1/30)
 
     # === 核心灵魂循环 ===
     async def _brain_loop(self):
