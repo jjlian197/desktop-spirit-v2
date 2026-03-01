@@ -61,8 +61,8 @@ class SpriteBrain:
             # 🚨 基础偏移补偿 (如果模型有固有偏移，可调整这些值)
             "offset_angle_x": 0.0,      # 头部左右偏移补偿
             "offset_angle_y": -15.0,      # 头部上下偏移补偿
-            "offset_angle_z": -8.0,     # 头部倾斜(Z轴)偏移补偿，负值向左倾斜
-            "offset_body_x": 0.0,       # 身体左右偏移补偿
+            "offset_angle_z": -30.0,     # 头部倾斜(Z轴)偏移补偿，负值向左倾斜
+            "offset_body_x": 15.0,       # 身体左右偏移补偿
             "offset_eye_x": 0.0,        # 眼球左右偏移补偿
             "offset_eye_y": 0.0,        # 眼球上下偏移补偿
         }
