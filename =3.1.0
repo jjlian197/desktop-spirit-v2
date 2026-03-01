@@ -1,0 +1,4 @@
+Requirement already satisfied: PyOpenGL in ./venv/lib/python3.14/site-packages (3.1.10)
+
+[notice] A new release of pip is available: 26.0 -> 26.0.1
+[notice] To update, run: /Volumes/D - Data/sherry-desktop-sprite/venv/bin/python3.14 -m pip install --upgrade pip

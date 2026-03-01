@@ -37,6 +37,9 @@ class WebSocketServer:
         self.clients = set()
         self._running = False
         
+        # 🚨 【触觉反馈】跨线程消息队列
+        self._message_queue = asyncio.Queue()
+        
         self.tts_manager: Optional[TTSManager] = None
         if HAS_TTS:
             try:
@@ -46,7 +49,6 @@ class WebSocketServer:
                 logger.error(f"Failed to initialize TTS manager: {e}")
         self.lip_sync = LipSyncWebSocketBroadcaster(self.tts_manager, self.clients, self.loop)
         self.lip_sync.start()
-    # Initialize TTS manager
         
     
     def start(self):
@@ -68,6 +70,9 @@ class WebSocketServer:
         self._running = True
 
         async def run():
+            # 🚨 保存事件循环引用（供线程安全广播使用）
+            self.loop = asyncio.get_running_loop()
+            
             try:
                 # Create server without subprotocols (simpler and more compatible)
                 self.server = await websockets.serve(
@@ -129,6 +134,8 @@ class WebSocketServer:
                 await self._handle_motion(msg_data, websocket)
             elif msg_type == "parameter":
                 await self._handle_parameter(msg_data, websocket)
+            elif msg_type == "parameter_batch":
+                await self._handle_parameter_batch(msg_data, websocket)
             elif msg_type == "look_at":
                 await self._handle_look_at(msg_data, websocket)
             elif msg_type == "background":
@@ -159,30 +166,21 @@ class WebSocketServer:
         # Get the live2d view
         live2d_view = self.sprite_window.live2d_view
         
-        # Check if the expression (or its mapping) exists in live2d_view
+        # Check if the expression exists in live2d_view
         actual_name = None
         available = []
         if live2d_view:
             if hasattr(live2d_view, 'get_available_expressions'):
                 available = live2d_view.get_available_expressions()
             
-            # Handle English to Chinese mapping
-            mapped_name = name
-            if hasattr(live2d_view, '_expression_mapping'):
-                # DEBUG: Log the mapping we found
-                mapping = live2d_view._expression_mapping
-                mapped_name = mapping.get(name.lower(), name)
-                logger.info(f"Mapped '{name}' to '{mapped_name}' using mapping of size {len(mapping)}")
-            else:
-                logger.warning("live2d_view does not have _expression_mapping")
-            
+            # 🚨 直接查找原始名称，不做映射
             if hasattr(live2d_view, 'find_expression'):
-                actual_name = live2d_view.find_expression(mapped_name)
-                logger.info(f"find_expression('{mapped_name}') returned '{actual_name}'")
+                actual_name = live2d_view.find_expression(name)
+                logger.info(f"find_expression('{name}') returned '{actual_name}'")
 
         if not actual_name:
             await self._send_error(websocket, f"Expression '{name}' not found. Available: {available[:10]}...")
-            logger.warning(f"❌ Expression not found: {name} (tried mapped name: {mapped_name})")
+            logger.warning(f"❌ Expression not found: {name}")
             return
 
         # Call set_expression on sprite_window (thread-safe)
@@ -253,6 +251,31 @@ class WebSocketServer:
             "previous_value": current_value
         })
         logger.info(f"✅ Parameter set: {param_id} = {value} (was: {current_value})")
+
+    async def _handle_parameter_batch(self, data: dict, websocket: WebSocketServerProtocol):
+        """批量设置参数 - 高效处理鼠标跟随"""
+        params = data.get("params", {})
+        
+        if not params:
+            return
+        
+        live2d_view = self.sprite_window.live2d_view
+        if not live2d_view or not hasattr(live2d_view, 'set_parameter'):
+            return
+        
+        # 批量设置参数
+        for param_id, value in params.items():
+            from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+            QMetaObject.invokeMethod(
+                self.sprite_window,
+                "set_parameter",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, param_id),
+                Q_ARG(float, float(value))
+            )
+        
+        # 降低日志频率，只在需要时输出
+        # logger.debug(f"✅ Parameters batch set: {len(params)} params")
 
     async def _handle_look_at(self, data: dict, websocket: WebSocketServerProtocol):
         """Handle look_at request - 控制眼神看向指定位置"""
@@ -465,17 +488,35 @@ class WebSocketServer:
         except Exception as e:
             logger.error(f"Failed to send error: {e}")
 
+    def broadcast_sync(self, msg_type: str, data: dict):
+        """🚨 【触觉反馈】线程安全的广播方法（供 Qt 线程调用）"""
+        if self.loop and self.loop.is_running():
+            # 使用 call_soon_threadsafe 将任务提交到 asyncio 事件循环
+            future = asyncio.run_coroutine_threadsafe(
+                self.broadcast(msg_type, data), 
+                self.loop
+            )
+            try:
+                future.result(timeout=1.0)  # 等待最多1秒
+            except Exception as e:
+                logger.debug(f"Broadcast sync error: {e}")
+        else:
+            logger.warning("WebSocket loop not running, cannot broadcast")
+
     async def broadcast(self, msg_type: str, data: dict):
         """Broadcast message to all connected clients"""
         if not self.clients:
+            logger.debug("No clients connected, skipping broadcast")
             return
 
         message = json.dumps({"type": msg_type, "data": data})
+        logger.info(f"📢 Broadcasting to {len(self.clients)} clients: {msg_type}")
         disconnected = set()
 
         for client in self.clients:
             try:
                 await client.send(message)
+                logger.debug(f"Message sent to {client.remote_address}")
             except websockets.exceptions.ConnectionClosed:
                 disconnected.add(client)
             except Exception as e:
@@ -483,4 +524,6 @@ class WebSocketServer:
                 disconnected.add(client)
 
         # Clean up disconnected clients
-        self.clients -= disconnected
+        if disconnected:
+            self.clients -= disconnected
+            logger.info(f"Cleaned up {len(disconnected)} disconnected clients")

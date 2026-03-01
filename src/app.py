@@ -11,13 +11,35 @@ import signal
 from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread
 from loguru import logger
 
 from src.core.sprite_window import SherrySpriteWindow
 from src.core.websocket_server import WebSocketServer
 from src.utils.logger import setup_logging
 from src.core.lip_sync_websocket import LipSyncWebSocketBroadcaster
+from src.brain.sprite_brain import SpriteBrain
+
+
+class BrainThread(QThread):
+    """在独立线程中运行大脑"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.brain = None
+        
+    def run(self):
+        """线程入口"""
+        self.brain = SpriteBrain()
+        try:
+            asyncio.run(self.brain.start())
+        except Exception as e:
+            logger.error(f"Brain error: {e}")
+    
+    def stop(self):
+        """停止大脑"""
+        if self.brain:
+            self.brain.stop()
 
 def setup_signal_handlers(app):
     """Setup graceful shutdown handlers"""
@@ -83,14 +105,33 @@ def main():
     ws_server = WebSocketServer(window)
     ws_server.start()
     
+    # 🚨 【触觉反馈】连接触摸事件到 WebSocket 广播
+    def on_touch_event(action, part):
+        """当雪莉被触摸时，广播到大脑（线程安全）"""
+        logger.info(f"🔄 转发触摸事件: {action} on {part}")
+        # 使用线程安全的广播方法
+        ws_server.broadcast_sync("touch_event", {
+            "action": action,
+            "part": part
+        })
+    
+    window.touch_event.connect(on_touch_event)
+    
     logger.info("✅ Sherry Desktop Sprite started successfully!")
     logger.info("   WebSocket: ws://127.0.0.1:8765/sprite")
+    
+    # Start Brain thread (精灵大脑)
+    brain_thread = BrainThread()
+    brain_thread.start()
+    logger.info("🧠 大脑已启动 (鼠标跟随激活)")
     
     # Run Qt event loop
     exit_code = app.exec()
     
     # Cleanup
     ws_server.stop()
+    brain_thread.stop()
+    brain_thread.wait(2000)  # 等待2秒让大脑优雅退出
     logger.info("👋 Sherry Desktop Sprite stopped.")
     
     return exit_code

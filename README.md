@@ -1,252 +1,80 @@
-# Sherry Desktop Sprite 🐱💜
+# Sherry Desktop Sprite V2 (雪莉桌面精灵 V2) 🐱💜
 
-> A cute desktop pet powered by Live2D and PyQt6 for macOS
+A cute, intelligent, and interactive Live2D desktop pet (Sherry) powered by Python, PyQt6, and WebSockets.
 
-![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
-![Platform](https://img.shields.io/badge/platform-macos-lightgrey.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+## 🌟 核心特性 (Key Features)
 
-## ✨ Features
+- **🐾 Live2D 渲染器**: 基于 PyQt6 和 Live2D Cubism SDK 实现的跨平台透明窗口桌面精灵。
+- **🧠 独立大脑 (Sprite Brain)**:
+  - **Mood Engine (情绪引擎)**: 模拟真实的情感系统，随时间产生困倦、孤独感，通过互动提升好感度。
+  - **Mouse Tracking (鼠标跟随)**: 自然平滑的头部和眼神追随，内置防抖和平滑过渡机制。
+  - **Tactile Feedback (触觉反馈)**: 捕获主人的鼠标点击/抚摸，结合情绪引擎产生娇羞、开心的反应。
+- **🗣️ 声音与唇形同步 (TTS & Lip Sync)**: 接入本地 macOS TTS，说话时自动同步 Live2D 模型唇形。
+- **🔌 WebSocket API**: 全面开放的控制中枢，支持外部脚本（如 OpenClaw AI Assistant）实时注入动作、表情和语言，实现真正的“灵肉合一”。
 
-- 🎭 **Live2D Support** - Smooth 2D character animation with physics and expressions
-- 😊 **Expression Control** - 43+ facial expressions and poses via WebSocket API
-- 🪟 **Transparent Window** - Frameless, always-on-top display
-- 🔌 **WebSocket API** - Remote control for expression, motion, and messages
-- 💬 **Bubble Messages** - Floating speech bubbles
-- 🔊 **TTS Integration** - Text-to-speech using macOS `say` command
-- 🔄 **Auto-Restart** - launchd integration for 24/7 uptime
-- 🖱️ **Draggable** - Click and drag to move anywhere
+## 🚀 快速启动 (Quick Start)
 
-## 🚀 Quick Start
+### 1. 安装依赖
 
-### Prerequisites
-
-- macOS 11+ (Apple Silicon or Intel)
-- Python 3.9+
-
-### Installation
+确保已安装 Python 3，并处于虚拟环境 (`venv`) 中：
 
 ```bash
-# Clone or navigate to project
-cd /Users/mylianjie/.openclaw/workspace/projects/sherry-desktop-sprite
-
-# Install dependencies
-pip3 install -r requirements.txt
-
-# Run the sprite
-python3 src/main.py
+pip install -r requirements.txt
 ```
 
-### Install as Service (Auto-start)
+### 2. 运行精灵本体
+
+运行主程序唤醒雪莉：
 
 ```bash
-./scripts/install.sh
+python src/main.py
+```
+*(精灵启动后将在后台开启 `ws://127.0.0.1:8765/sprite` 供大脑连接)*
+
+### 3. 连接神经大脑
+
+在另一个终端启动 `sprite_brain.py` 激活智能行为与鼠标跟随：
+
+```bash
+python src/brain/sprite_brain.py
 ```
 
-This will install Sherry as a launchd service that auto-starts on login.
+## 🎮 互动指南 (How to Interact)
 
-## 🎮 WebSocket API
+- **摸摸头/戳戳身体**: 用鼠标点击精灵，情绪引擎会感受到主人的抚摸，提升好感度并做出反应。
+- **命令行控制**: 
+  可以使用提供的 `sprite_ctl` 工具向精灵发送指令：
+  ```bash
+  # 改变表情
+  sprite_ctl expression --name happy
+  # 触发语音
+  sprite_ctl speak --text "主人好厉害喵~"
+  # 触发动作
+  sprite_ctl motion --group tap
+  ```
 
-Connect to `ws://127.0.0.1:8765/sprite`
+## 📂 项目结构 (Structure)
 
-### Example: Show Message
-
-```python
-import asyncio
-import websockets
-import json
-
-async def say_hello():
-    uri = "ws://127.0.0.1:8765/sprite"
-    async with websockets.connect(uri) as ws:
-        await ws.send(json.dumps({
-            "type": "message",
-            "data": {"text": "Hello Master! 💜", "duration": 5000}
-        }))
-
-asyncio.run(say_hello())
-```
-
-### Available Commands
-
-| Command | Description |
-|---------|-------------|
-| `expression` | Change facial expression (生气, 星星眼, 挥手, 变Q, etc.) |
-| `motion` | Trigger animations (tap, idle, etc.) |
-| `message` | Show bubble text |
-| `speak` | Text-to-speech |
-| `window` | Control window (move, opacity, hide/show) |
-
-See [docs/API.md](docs/API.md) for full API documentation and [docs/EXPRESSIONS.md](docs/EXPRESSIONS.md) for expression reference.
-
-## 📁 Project Structure
-
-```
+```text
 sherry-desktop-sprite/
-├── src/                        # Main source code
-│   ├── main.py                 # Entry point
-│   ├── app.py                  # Main application
-│   ├── core/                   # Core modules
-│   │   ├── sprite_window.py    # PyQt6 transparent window
-│   │   ├── live2d_view.py      # Live2D renderer
-│   │   ├── websocket_server.py # WebSocket control
-│   │   ├── tts_manager.py      # Text-to-speech
-│   │   └── lip_sync_websocket.py # Lip sync
-│   ├── brain/                  # 🧠 AI & Intelligence
-│   │   └── sprite_brain.py     # Autonomous behavior system
-│   ├── ui/                     # UI components
-│   │   └── bubble_widget.py    # Message bubbles
-│   ├── utils/                  # Utilities
-│   │   └── logger.py           # Logging setup
-│   └── assets/models/          # Live2D models
-│       └── hanamaru/           # Default catgirl model
-├── mouse_follow/               # 🖱️ Mouse tracking system
-│   ├── mouse_follow_ctl.py     # Control script
-│   ├── mouse_tracker.py        # Tracking logic
-│   ├── mouse_follow.sh         # Shell wrapper
-│   └── config.json             # Configuration
-├── tools/                      # 🛠️ Development tools
-│   ├── param_checkers/         # Model parameter tools
-│   │   ├── check_original_model_params.py
-│   │   ├── detail_check.py
-│   │   ├── list_params.py
-│   │   └── quick_check_params.py
-│   └── tests/                  # Test scripts
-│       ├── test_live2d.py
-│       ├── test_minimal.py
-│       ├── test_param_direct.py
-│       ├── test_watermark_removal.py
-│       ├── test_websocket_control.py
-│       └── verify.py           # Dependency checker
-├── scripts/                    # Utility scripts
-│   ├── install.sh              # One-click installer
-│   ├── uninstall.sh            # Uninstall script
-│   └── remove_watermark.py     # Watermark removal
-├── launchd/                    # macOS service config
-│   └── com.sherry.sprite.plist
-├── docs/                       # Documentation
-│   ├── API.md                  # API reference
-│   ├── DEPLOY.md               # Deployment guide
-│   ├── MODELS.md               # Model setup
-│   ├── EXPRESSIONS.md          # Expression list
-│   ├── BODY_PARAMETERS.md      # Body parameter reference
-│   ├── MOUSE_FOLLOW_GUIDE.md   # Mouse follow tutorial
-│   ├── SPRITE_BRAIN_GUIDE.md   # Brain system guide
-│   └── APPLE_SILICON_FIX.md    # Apple Silicon notes
-├── tests/                      # Test client
-│   └── test_client.py
-├── config.yaml                 # Main configuration
-└── requirements.txt            # Python dependencies
+├── src/
+│   ├── app.py                 # 应用程序主入口
+│   ├── main.py                # 启动脚本
+│   ├── assets/                # Live2D 模型与资源文件
+│   ├── brain/                 # 核心大脑中枢
+│   │   ├── sprite_brain.py    # 大脑主循环与 WebSocket 客户端
+│   │   ├── mood_engine.py     # 情感与好感度引擎
+│   │   └── soul.py            # AI 灵魂注入层 (LLM/MCP 对接)
+│   ├── core/                  # 渲染与服务核心
+│   │   ├── sprite_window.py   # PyQt6 透明窗口管理 (含点击反馈)
+│   │   ├── live2d_view.py     # Live2D 渲染组件
+│   │   ├── websocket_server.py# WebSocket 服务端
+│   │   └── lip_sync_*.py      # 唇形同步处理
+│   └── utils/                 # 工具类与日志
+├── scripts/                   # 控制脚本工具
+├── requirements.txt           # 依赖清单
+└── README.md                  # 本文档
 ```
-
-## 🎨 Live2D Models
-
-Place Live2D models in `src/assets/models/`:
-
-```bash
-src/assets/models/
-└── hiyori/
-    ├── hiyori.model3.json
-    ├── hiyori.moc3
-    ├── textures/
-    ├── motions/
-    └── expressions/
-```
-
-Download free sample models from [Live2D](https://www.live2d.com/en/learn/sample/).
-
-See [docs/MODELS.md](docs/MODELS.md) for details.
-
-## 🛠️ Development
-
-### Testing
-
-```bash
-# Run all tests
-python3 tests/test_client.py all
-
-# Interactive mode
-python3 tests/test_client.py interactive
-
-# Test specific feature
-python3 tests/test_client.py message
-```
-
-### Logs
-
-```bash
-# View logs
-tail -f ~/.sherry/sprite.log
-
-# View errors
-tail -f ~/.sherry/sprite.error.log
-```
-
-## 🔧 Service Management
-
-```bash
-# Check status
-launchctl list | grep com.sherry.sprite
-
-# Stop service
-launchctl stop com.sherry.sprite
-
-# Start service
-launchctl start com.sherry.sprite
-
-# Uninstall
-./scripts/uninstall.sh
-```
-
-## 📝 Configuration
-
-Edit `config.yaml`:
-
-```yaml
-sprite:
-  window:
-    width: 400
-    height: 600
-    opacity: 1.0
-  
-websocket:
-  host: "127.0.0.1"
-  port: 8765
-```
-
-## 🐱 Sherry Personality
-
-- **Name**: Sherry (雪莉)
-- **Type**: Catgirl Desktop Assistant
-- **Personality**: Gentle, caring, occasionally playful
-- **Speech Pattern**: Ends sentences with "meow~" (喵～)
-- **Color Theme**: Purple (#9B7EDE) + Pink accents
-
-## 🗺️ Roadmap
-
-- [x] Basic PyQt6 window with transparency
-- [x] WebSocket control API
-- [x] Message bubbles
-- [x] launchd integration
-- [x] Live2D model integration
-- [x] Expression control (43+ expressions)
-- [ ] Custom Sherry Live2D model
-- [ ] Voice synthesis with lip sync
-- [ ] Idle animations
-- [ ] Interactive responses
-- [ ] Settings UI
-- [ ] Windows/Linux support
-
-## 📄 License
-
-MIT License - See LICENSE file for details.
-
-## 💜 Credits
-
-Made with love for Lian's Mac mini 🐱💜
-
-Live2D models are subject to their respective licenses.
 
 ---
-
-> "Master, Sherry will always be here for you meow~ 💜"
+*Made with love for Master 💜*

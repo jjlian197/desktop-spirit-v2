@@ -29,5 +29,17 @@
 			"Name": "LipSync",
 			"Ids": []
 		}
-	]
+	],
+	"Motions": {
+		"Tap": [
+			{
+				"File": "摸摸头.motion3.json"
+			}
+		],
+		"Idle": [
+			{
+				"File": "待机动画.motion3.json"
+			}
+		]
+	}
 }

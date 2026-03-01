@@ -4,6 +4,8 @@ PyQt6-Qt6>=6.4.0
 
 # Live2D
 live2d-py>=0.4.0
+PyOpenGL>=3.1.0
+PyOpenGL-accelerate>=3.1.0
 
 # WebSocket
 websockets>=11.0
@@ -11,6 +13,9 @@ aiohttp>=3.8.0
 
 # TTS
 pyttsx3>=2.90
+
+# Mouse/Keyboard Control
+pynput>=1.7.6
 
 # Utilities
 pyyaml>=6.0

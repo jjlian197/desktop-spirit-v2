@@ -18,7 +18,7 @@ from typing import Optional, Dict, List
 IS_APPLE_SILICON = platform.machine() == 'arm64' and platform.system() == 'Darwin'
 
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal, QThread
 from PyQt6.QtGui import QMouseEvent, QSurfaceFormat
 from loguru import logger
 
@@ -47,30 +47,67 @@ class Live2DView(QOpenGLWidget):
     """
     
     # 参数化表情映射表 - 直接操作底层参数，彻底规避 AddExpression 导致的闪退
+    # 🚨 【好感度解锁表情】只有这些参数是模型中实际存在的
     EXPRESSION_PARAM_MAP = {
-        "happy": "Key17",   # 星星眼
-        "sad": "Key20",     # 哭哭
-        "angry": "Key14",   # 生气
-        "love": "Key32",    # 比心
-        "blush": "Key21",   # 红脸
-        "daze": "Key15",    # 呆
+        "happy": "Key17",       # 星星眼
+        "sad": "Key20",         # 哭哭
+        "angry": "Key14",       # 生气 (<30好感度)
+        "love": "Key32",        # 比心 (>80好感度)
+        "blush": "Key21",       # 红脸 (30-60好感度)
+        "daze": "Key15",        # 呆 (30-60好感度)
+        # 🚨 新增解锁表情（复用已有参数）
+        "star_eye": "Key17",    # 星星眼 (60-80好感度)
+        "cat_paw": "Key32",     # 猫爪 (60-80好感度)
+        "heart": "Key32",       # 比心 (>80好感度)
+        "cat_mouth": "Key32",   # 叼猫条 (>80好感度)
+        "q_style": "Key17",     # 变Q (>80好感度)
+        "surprised": "Key14",   # 惊讶
+        "sleepy": "Key15",      # 困倦
+        # 注意：normal 不在此映射中，单独处理
     }
+    
+    # 英文到中文的映射（供外部使用）
+    # 🚨 【好感度解锁表情映射】
+    _expression_mapping = {
+        "happy": "happy",
+        "sad": "sad",
+        "angry": "angry",
+        "love": "love",
+        "blush": "blush",
+        "daze": "daze",
+        "normal": "normal",
+        "surprised": "surprised",
+        "sleepy": "sleepy",
+        # 🚨 新增好感度解锁表情
+        "star_eye": "happy",      # 星星眼 → happy
+        "cat_paw": "love",        # 猫爪 → love  
+        "heart": "love",          # 比心 → love
+        "cat_mouth": "love",      # 叼猫条 → love
+        "q_style": "happy",       # 变Q → happy
+        "sleepy": "sleepy",
+        # 🚨 新增解锁表情
+        "star_eye": "星星眼",
+        "cat_paw": "猫爪",
+        "heart": "比心",
+        "cat_mouth": "叼猫条",
+        "q_style": "变Q",
+    }
+    
+    # Signal emitted when model is successfully loaded
+    model_loaded = pyqtSignal()
+    
+    # 🚨 【触觉反馈】触摸事件信号 - 当主人触摸雪莉时发射
+    touched = pyqtSignal(str, str)  # (action, part) 例如 ("tap", "head")
 
     def __init__(self, parent=None, model_path: Optional[str] = None):
         super().__init__(parent)
 
-# 🚨 【关键修复 1】：配置 OpenGL 表面，强制分配 8 位的 Alpha 透明通道
+        # 🚨 【关键修复 1】：配置 OpenGL 表面，强制分配 8 位的 Alpha 透明通道
         fmt = QSurfaceFormat()
         fmt.setAlphaBufferSize(8)
         self.setFormat(fmt)
-
-
-# 在 __init__ 中添加：
-        self._lip_sync_enabled = False
-        self._current_mouth_open = 0.0
-        self._mouth_smooth_value = 0.0
         
-# 🚨 【关键修复 2】：告诉 Qt 这个 OpenGL 组件允许背景透明
+        # 🚨 【关键修复 2】：告诉 Qt 这个 OpenGL 组件允许背景透明
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
 
@@ -226,15 +263,46 @@ class Live2DView(QOpenGLWidget):
             
             self.model.LoadModelJson(str(model_json))
             self.model_path = model_path
+            
+            # 🚨 预加载动作文件
+            self._preload_motions(model_dir)
+            
             logger.info(f"✅ Model loaded successfully: {model_json.name}")
             
             if not self.update_timer.isActive():
                 self.update_timer.start(16)
             
+            # Emit signal to notify that model is ready
+            self.model_loaded.emit()
+            
             return True
         except Exception as e:
             logger.error(f"❌ Failed to load model: {e}")
             return False
+    
+    def _preload_motions(self, model_dir: Path):
+        """🚨 预加载动作文件到模型"""
+        if not self.model or not HAS_LIVE2D:
+            return
+        
+        motion_files = list(model_dir.glob("*.motion3.json"))
+        logger.info(f"🔍 Found {len(motion_files)} motion files")
+        
+        for motion_file in motion_files:
+            try:
+                # 从文件名提取动作名称
+                motion_name = motion_file.stem
+                
+                # 尝试使用 live2d 加载动作
+                # 注意：不同版本的 live2d-py API 可能不同
+                if hasattr(self.model, 'LoadMotion'):
+                    self.model.LoadMotion(motion_name, str(motion_file), 1000, 1000)
+                    logger.info(f"✅ Preloaded motion: {motion_name}")
+                else:
+                    # 如果模型已经通过 model3.json 加载了动作，这里跳过
+                    logger.debug(f"Motion loading via model3.json: {motion_name}")
+            except Exception as e:
+                logger.debug(f"Note: Could not preload motion {motion_file.name}: {e}")
     
     def set_big_head_mode(self, enabled: bool):
         self.is_big_head = enabled
@@ -248,25 +316,35 @@ class Live2DView(QOpenGLWidget):
         self.update()
 
     def paintGL(self):
-        if not self.model or not HAS_LIVE2D:
+        if not HAS_LIVE2D:
             return
 
         try:
-            self.makeCurrent()
-
-# 🚨 【关键修复 3】：用完全透明的颜色 (RGBA 都是 0) 清空上一帧的画面
-            if hasattr(live2d, 'clearBuffer'):
-                live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
+            from OpenGL.GL import (
+                glEnable, GL_BLEND, glBlendFunc, GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
+                glClearColor, glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
+            )
+            
+            # 🚨 【关键】清除为完全透明，让 Qt 背景显示出来
+            glClearColor(0.0, 0.0, 0.0, 0.0)  # 透明黑色
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            
+            # 如果没有模型，直接返回（显示红色背景）
+            if not self.model:
+                return
+            
+            # 启用 premultiplied alpha 混合
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
   
-# 🚨 【关键插入点】：必须在 model.Update() 之前设置嘴型参数！
+            # 嘴型同步
             if getattr(self, '_lip_sync_enabled', False):
                 self._update_lip_sync()
 
-            self.model.Update()  # Live2D 引擎会在这一步吸收你的嘴型参数并计算物理效果
-            
+            self.model.Update()
             self.model.Drag(self.mouse_x, self.mouse_y)
           
-            # 保持大头模式缩放和偏移
+            # 大头模式
             if self.is_big_head:
                 self.model.SetScale(2.5)
                 self.model.SetOffset(0.0, -1.2)
@@ -274,7 +352,9 @@ class Live2DView(QOpenGLWidget):
                 self.model.SetScale(1.0)
                 self.model.SetOffset(0.0, 0.0)
 
+            # 绘制模型
             self.model.Draw()
+            
         except Exception as e:
             logger.error(f"Render error: {e}")
     
@@ -302,17 +382,41 @@ class Live2DView(QOpenGLWidget):
                 
             # 3. 设置目标表情参数
             param_id = self.EXPRESSION_PARAM_MAP.get(name.lower())
-            if param_id:
-                self.model.SetParameterValue(param_id, 1.0)
+            if param_id is None:
+                # normal 模式，已经重置过参数了
                 self.current_expression = name
-                logger.info(f"✅ Expression set via parameter: {name} ({param_id}=1.0)")
+                logger.info(f"✅ Expression set: {name} (normal mode)")
                 return True
+            elif param_id:
+                try:
+                    self.model.SetParameterValue(param_id, 1.0)
+                    self.current_expression = name
+                    logger.info(f"✅ Expression set via parameter: {name} ({param_id}=1.0)")
+                    return True
+                except Exception as e:
+                    logger.error(f"Failed to set parameter {param_id}: {e}")
+                    return False
             else:
                 logger.warning(f"Unknown expression name: {name}")
                 return False
         except Exception as e:
             logger.error(f"Failed to set param-based expression: {e}")
             return False
+    
+    def get_available_expressions(self) -> list:
+        """返回所有可用表情列表"""
+        return ["normal"] + list(self.EXPRESSION_PARAM_MAP.keys())
+    
+    def find_expression(self, name: str) -> str:
+        """查找表情名称，支持大小写不敏感匹配"""
+        if not name:
+            return "normal"
+        name_lower = name.lower()
+        if name_lower in ["normal", "reset"]:
+            return "normal"
+        if name_lower in self.EXPRESSION_PARAM_MAP:
+            return name_lower
+        return None
     
     def set_parameter(self, param_id: str, value: float) -> bool:
         if not self.model or not HAS_LIVE2D:
@@ -360,13 +464,89 @@ class Live2DView(QOpenGLWidget):
             logger.error(f"Failed to list parameters: {e}")
             return []
     
+    def trigger_motion(self, group: str, index: int = 0):
+        """🚨 【触觉反馈】触发动画/动作"""
+        if not self.model or not HAS_LIVE2D:
+            logger.warning("Cannot trigger motion: model not loaded")
+            return False
+        
+        try:
+            # Live2D 使用 StartMotion 触发动画
+            # priority: 0=待机, 1=正常, 2=强制, 3=绝对
+            self.model.StartMotion(group, index, priority=2)
+            logger.info(f"🎬 Motion triggered: {group}[{index}]")
+            return True
+        except Exception as e:
+            logger.debug(f"Motion trigger failed (optional): {e}")
+            return False
+    
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton and self.model:
-            # 触发摸脸效果
+            # 🚨 【触觉反馈 - 第一步】获取点击位置并检测碰撞区域
+            x = event.position().x()
+            y = event.position().y()
+            
+            # 检测点击区域（基于屏幕坐标比例）
+            width = self.width()
+            height = self.height()
+            
+            # 归一化坐标 (0-1)
+            nx = x / width
+            ny = y / height
+            
+            # 🚨 【分区触摸反馈】精细的区域检测
+            # 头顶区域：最上方 0.15-0.35
+            if 0.35 <= nx <= 0.65 and 0.15 <= ny <= 0.30:
+                touched_part = "头顶"
+                logger.info(f"👆 主人抚摸了雪莉的头顶！坐标: ({nx:.2f}, {ny:.2f})")
+            # 脸颊/脸部区域：中间偏上 0.30-0.45
+            elif 0.30 <= nx <= 0.70 and 0.30 <= ny <= 0.45:
+                touched_part = "脸颊"
+                logger.info(f"👆 主人捏了雪莉的脸！坐标: ({nx:.2f}, {ny:.2f})")
+            # 左耳区域
+            elif nx < 0.30 and 0.25 <= ny <= 0.40:
+                touched_part = "左耳"
+                logger.info(f"👆 主人摸了雪莉的左耳！坐标: ({nx:.2f}, {ny:.2f})")
+            # 右耳区域
+            elif nx > 0.70 and 0.25 <= ny <= 0.40:
+                touched_part = "右耳"
+                logger.info(f"👆 主人摸了雪莉的右耳！坐标: ({nx:.2f}, {ny:.2f})")
+            # 身体/衣服区域：中间 0.45-0.70
+            elif 0.30 <= nx <= 0.70 and 0.45 <= ny <= 0.70:
+                touched_part = "身体"
+                logger.info(f"👆 主人抱了雪莉！坐标: ({nx:.2f}, {ny:.2f})")
+            # 左手/左爪区域
+            elif nx < 0.25 and 0.55 <= ny <= 0.75:
+                touched_part = "左手"
+                logger.info(f"👆 主人握了雪莉的左手！坐标: ({nx:.2f}, {ny:.2f})")
+            # 右手/右爪区域
+            elif nx > 0.75 and 0.55 <= ny <= 0.75:
+                touched_part = "右手"
+                logger.info(f"👆 主人握了雪莉的右手！坐标: ({nx:.2f}, {ny:.2f})")
+            # 尾巴区域：下方
+            elif 0.40 <= nx <= 0.60 and ny > 0.70:
+                touched_part = "尾巴"
+                logger.info(f"👆 主人摸了雪莉的尾巴！坐标: ({nx:.2f}, {ny:.2f})")
+            else:
+                touched_part = "身体"
+                logger.info(f"👆 主人触摸了雪莉！坐标: ({nx:.2f}, {ny:.2f})")
+            
+            # 发射触摸信号（通知 SpriteWindow）
+            self.touched.emit("tap", touched_part)
+            
+            # 本地即时反馈：根据部位显示不同表情
+            if touched_part in ["脸颊", "左耳", "右耳"]:
+                self.set_expression("blush")  # 脸红
+            elif touched_part in ["头顶"]:
+                self.set_expression("happy")  # 开心
+            elif touched_part in ["左手", "右手"]:
+                self.set_expression("love")  # 爱心眼
+            
+            # 触发摸脸效果（本地即时反馈）
             self.set_parameter("Key39", 1.0)
             self._touch_timer.start(1500)
-            logger.info("👆 Touch interaction: 摸脸 triggered (Key39=1.0)")
+        
         super().mousePressEvent(event)
     
     def _on_touch_end(self):

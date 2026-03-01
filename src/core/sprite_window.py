@@ -4,6 +4,7 @@ Sherry Sprite Window - Transparent, Frameless, Always-on-Top
 """
 
 import sys
+import os
 import platform
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu
 )
 from PyQt6.QtCore import Qt, QPoint, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QIcon, QAction, QFont
+from PyQt6.QtGui import QIcon, QAction, QFont, QPalette, QColor, QGradient, QLinearGradient ,QSurfaceFormat
 from loguru import logger
 
 from src.ui.bubble_widget import BubbleWidget
@@ -46,6 +47,9 @@ class SherrySpriteWindow(QMainWindow):
     expression_changed = pyqtSignal(str)
     motion_triggered = pyqtSignal(str, int)
     message_received = pyqtSignal(str, int)
+    
+    # 🚨 【触觉反馈】触摸事件信号 - 当用户触摸雪莉时发射
+    touch_event = pyqtSignal(str, str)  # (action, part) 例如 ("tap", "head")
 
     def __init__(self):
         super().__init__()
@@ -103,9 +107,14 @@ class SherrySpriteWindow(QMainWindow):
                 self.live2d_view = Live2DView(self.central_widget)
                 # 确保 OpenGL 部件本身不遮挡背景
                 self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-                #self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop)
+                self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop)
                 layout.addWidget(self.live2d_view)
-                model_path = "/Users/mylianjie/.openclaw/workspace/live2d-models/hanamaru"
+                # Connect model loaded signal for auto watermark removal
+                self.live2d_view.model_loaded.connect(self._auto_remove_watermark)
+                # 🚨 【触觉反馈】连接触摸信号到窗口级信号
+                self.live2d_view.touched.connect(self._on_touched)
+                # Use built-in model from project assets
+                model_path = os.path.join(os.path.dirname(__file__), "../assets/models/hanamaru")
                 self.live2d_view.load_model(model_path)
             except Exception as e:
                 logger.error(f"Failed to initialize Live2D: {e}")
@@ -155,14 +164,13 @@ class SherrySpriteWindow(QMainWindow):
     def set_background(self, bg_type: str):
         """设置窗口背景 - 支持纯色、渐变、透明和本地图片路径"""
         if bg_type == "purple":
-            # 渐变紫色
-            style = """
+            # 渐变紫色 - 使用样式表
+            self.central_widget.setStyleSheet("""
                 #centralWidget {
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #667eea, stop:1 #764ba2);
                     border-radius: 20px;
                 }
-            """
-            self.central_widget.setStyleSheet(style)
+            """)
             logger.info("🎨 Background set to Purple Gradient")
             
         elif bg_type == "transparent":
@@ -171,19 +179,16 @@ class SherrySpriteWindow(QMainWindow):
             logger.info("🎨 Background set to Transparent")
             
         elif bg_type.startswith("image:"):
-            # 图片背景 - 使用 border-image 实现自动缩放填满
-            image_path = bg_type[6:]  # 移除 "image:" 前缀
+            # 图片背景
+            image_path = bg_type[6:]
             from pathlib import Path
             abs_path = Path(image_path).expanduser().resolve()
             
-            # 🚨 【新增】安全检查：确保图片文件真的存在
             if not abs_path.exists():
                 logger.error(f"❌ 背景图片不存在: {abs_path}")
                 return
                 
-            # 🚨 【修复】QSS 需要本地绝对路径，不支持 file:// 协议，统一替换为正斜杠
             safe_path = str(abs_path).replace('\\', '/')
-            
             style = f"""
                 #centralWidget {{
                     border-image: url("{safe_path}") 0 0 0 0 stretch stretch;
@@ -194,7 +199,7 @@ class SherrySpriteWindow(QMainWindow):
             logger.info(f"🎨 Background set to image: {safe_path}")
             
         else:
-            # 允许直接传递颜色
+            # 纯色背景
             self.central_widget.setStyleSheet(f"#centralWidget {{ background: {bg_type}; border-radius: 20px; }}")
             logger.info(f"🎨 Background set to custom: {bg_type}")
             
@@ -326,6 +331,18 @@ class SherrySpriteWindow(QMainWindow):
         self._watermark_enabled = not self._watermark_enabled
         val = -1.0 if self._watermark_enabled else 0.0
         self.set_parameter("Open_EyeMask4", val)
+    
+    def _auto_remove_watermark(self):
+        """启动时自动去水印"""
+        self._watermark_enabled = True
+        self.set_parameter("Open_EyeMask4", -1.0)
+        logger.info("🎭 已自动启用去水印")
+    
+    def _on_touched(self, action: str, part: str):
+        """🚨 【触觉反馈】处理触摸事件，转发到大脑"""
+        logger.info(f"💖 雪莉感受到了主人的{action}，部位: {part}")
+        # 发射信号，由 app.py 转发到 WebSocket
+        self.touch_event.emit(action, part)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
