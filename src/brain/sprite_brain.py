@@ -59,11 +59,11 @@ class SpriteBrain:
             # 眼神最大偏移 (默认1.0, 可增大到 1.2-1.5)
             "eye_max_offset": 1.5,
             # 🚨 基础偏移补偿 (如果模型有固有偏移，可调整这些值)
-            "offset_angle_x": 0.0,      # 头部左右偏移补偿
-            "offset_angle_y": -15.0,      # 头部上下偏移补偿
+            "offset_angle_x": 25.0,      # 头部左右偏移补偿
+            "offset_angle_y": -30.0,      # 头部上下偏移补偿
             "offset_angle_z": -30.0,     # 头部倾斜(Z轴)偏移补偿，负值向左倾斜
             "offset_body_x": 15.0,       # 身体左右偏移补偿
-            "offset_eye_x": 0.0,        # 眼球左右偏移补偿
+            "offset_eye_x": 0.5,        # 眼球左右偏移补偿
             "offset_eye_y": 0.0,        # 眼球上下偏移补偿
         }
         
@@ -94,6 +94,18 @@ class SpriteBrain:
             "ParamEyeBallY": 0.0,
         }
         
+        # 🚨 空闲检测配置
+        self.idle_config = {
+            "enabled": True,           # 是否启用空闲动画
+            "idle_timeout": 30,        # 进入空闲状态所需秒数（无操作）
+            "motion_interval": 6,      # 待机动画播放间隔（秒）
+            "random_blink": True,      # 空闲时随机眨眼
+            "random_sigh": True,       # 空闲时随机叹气/说话
+        }
+        self.last_interaction_time = time.time()  # 上次交互时间戳
+        self.is_idle = False                      # 当前是否处于空闲状态
+        self.idle_motion_playing = False          # 是否正在播放待机动画
+        
         try:
             self.screen = AppKit.NSScreen.mainScreen()
             self.screen_width = self.screen.frame().size.width
@@ -123,11 +135,12 @@ class SpriteBrain:
                     brain_task = asyncio.create_task(self._brain_loop())
                     mouse_task = asyncio.create_task(self._mouse_follow_loop())
                     receive_task = asyncio.create_task(self._receive_loop())  # 🚨 【触觉反馈】接收消息
+                    idle_task = asyncio.create_task(self._idle_loop())  # 🚨 空闲检测循环
                     
                     try:
                         # 等待任一任务完成（通常是连接断开）
                         done, pending = await asyncio.wait(
-                            [brain_task, mouse_task, receive_task],
+                            [brain_task, mouse_task, receive_task, idle_task],
                             return_when=asyncio.FIRST_COMPLETED
                         )
                         
@@ -193,11 +206,75 @@ class SpriteBrain:
         logger.info("✅ 模型已复位到正前方")
 
     async def speak(self, text: str):
+        self.reset_idle_timer()  # 🚨 说话交互，重置空闲计时
         return await self.send_command("speak", {"text": text})
 
     async def trigger_motion(self, group: str):
+        self.reset_idle_timer()  # 🚨 动作交互，重置空闲计时
         return await self.send_command("motion", {"group": group})
     
+    async def set_expression(self, expression_name: str):
+        self.reset_idle_timer()  # 🚨 表情交互，重置空闲计时
+        return await self.send_command("expression", {"name": expression_name})
+    
+    # 🚨 重置空闲计时器（在任何交互时调用）
+    def reset_idle_timer(self):
+        """重置空闲计时器，标记为非空闲状态"""
+        self.last_interaction_time = time.time()
+        was_idle = self.is_idle
+        self.is_idle = False
+        self.idle_motion_playing = False
+        if was_idle:
+            logger.info("👋 主人回来啦！退出空闲状态")
+    
+    # 🚨 空闲动画循环
+    async def _idle_loop(self):
+        """空闲检测与待机动画循环"""
+        logger.info("😴 空闲检测已启动...")
+        while self.running:
+            if not self.ws:
+                await asyncio.sleep(1)
+                continue
+            
+            if not self.idle_config["enabled"]:
+                await asyncio.sleep(1)
+                continue
+            
+            idle_time = time.time() - self.last_interaction_time
+            
+            # 判断是否进入空闲状态
+            if idle_time >= self.idle_config["idle_timeout"] and not self.is_idle:
+                self.is_idle = True
+                logger.info(f"😴 进入空闲状态（已闲置 {idle_time:.1f} 秒）")
+            
+            # 空闲状态下播放待机动画
+            if self.is_idle and not self.idle_motion_playing:
+                self.idle_motion_playing = True
+                logger.debug("🎬 播放待机动画...")
+                await self.send_command("motion", {"group": "Idle"})
+                # 等待动画播放完成（6秒）
+                await asyncio.sleep(self.idle_config["motion_interval"])
+                self.idle_motion_playing = False
+                
+                # 随机眨眼（30%概率）
+                if self.idle_config["random_blink"] and random.random() < 0.3:
+                    await self.send_command("expression", {"name": "happy"})
+                    await asyncio.sleep(0.1)
+                    await self.send_command("expression", {"name": "normal"})
+                    logger.debug("😉 空闲眨眼")
+                
+                # 随机叹气/说话（10%概率）
+                if self.idle_config["random_sigh"] and random.random() < 0.1:
+                    sighs = [
+                        "好无聊啊...",
+                        "主人在忙什么呢...",
+                        "雪莉有点困了...",
+                        "哼...都不理雪莉...",
+                    ]
+                    await self.speak(random.choice(sighs))
+            
+            await asyncio.sleep(0.5)
+
     # === 🚨 【触觉反馈】接收消息循环 ===
     async def _receive_loop(self):
         """接收来自前端的消息（触摸事件等）"""
@@ -210,6 +287,9 @@ class SpriteBrain:
                 data = json.loads(message)
                 msg_type = data.get("type")
                 msg_data = data.get("data", {})
+                
+                # 🚨 任何消息都视为交互，重置空闲计时器
+                self.reset_idle_timer()
                 
                 # 🚨 【触觉反馈 - 第二步】处理触摸事件
                 if msg_type == "touch_event":
@@ -535,6 +615,9 @@ class SpriteBrain:
             
             logger.info(f"🌐 HTTP API 收到命令: {cmd_type}")
             
+            # 🚨 HTTP API 调用视为交互，重置空闲计时器
+            self.reset_idle_timer()
+            
             # 🚨 拦截 speak 命令，让雪莉说话时正视前方
             if cmd_type == "speak":
                 self.mouse_config["enabled"] = False
@@ -567,11 +650,15 @@ class SpriteBrain:
     
     async def _handle_http_health(self, request):
         """健康检查端点"""
+        idle_time = time.time() - self.last_interaction_time if hasattr(self, 'last_interaction_time') else 0
         return web.json_response({
             "status": "ok",
             "websocket_connected": self.ws is not None,
             "current_mood": self.mood.current_mood if hasattr(self, 'mood') else "unknown",
-            "affection": self.mood.affection_level if hasattr(self, 'mood') else 0
+            "affection": self.mood.affection_level if hasattr(self, 'mood') else 0,
+            "is_idle": getattr(self, 'is_idle', False),
+            "idle_time": round(idle_time, 1),
+            "idle_timeout": getattr(self.idle_config, 'idle_timeout', 30) if hasattr(self, 'idle_config') else 30
         })
     
     async def _start_http_server(self):
