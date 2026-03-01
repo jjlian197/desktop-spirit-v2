@@ -14,6 +14,7 @@ from datetime import datetime
 import AppKit
 from pynput.mouse import Controller
 import websockets
+from aiohttp import web
 
 from src.brain.mood_engine import MoodEngine
 from src.brain.soul import SherrySoul
@@ -26,10 +27,13 @@ logging.basicConfig(
 logger = logging.getLogger("SpriteBrain")
 
 class SpriteBrain:
-    def __init__(self, ws_uri="ws://127.0.0.1:8765/sprite"):
+    def __init__(self, ws_uri="ws://127.0.0.1:8765/sprite", http_port=8766):
         self.ws_uri = ws_uri
+        self.http_port = http_port
         self.ws = None
         self.running = False
+        self.http_runner = None
+        self.http_site = None
         
         # 核心引擎
         self.mood = MoodEngine()
@@ -51,15 +55,16 @@ class SpriteBrain:
             # 头部最大角度 (默认30, 可增大到 45-60)
             "head_max_angle": 75,
             # 身体最大角度 (默认20, 可增大到 30-40)
-            "body_max_angle": 30,
+            "body_max_angle": 60,
             # 眼神最大偏移 (默认1.0, 可增大到 1.2-1.5)
             "eye_max_offset": 1.5,
             # 🚨 基础偏移补偿 (如果模型有固有偏移，可调整这些值)
             "offset_angle_x": 0.0,      # 头部左右偏移补偿
             "offset_angle_y": -15.0,      # 头部上下偏移补偿
-            "offset_body_x": 5.0,       # 身体左右偏移补偿
-            "offset_eye_x": 0.3,        # 眼球左右偏移补偿
-            "offset_eye_y": -0.2,        # 眼球上下偏移补偿
+            "offset_angle_z": -8.0,     # 头部倾斜(Z轴)偏移补偿，负值向左倾斜
+            "offset_body_x": 0.0,       # 身体左右偏移补偿
+            "offset_eye_x": 0.0,        # 眼球左右偏移补偿
+            "offset_eye_y": 0.0,        # 眼球上下偏移补偿
         }
         
         # 当前参数值 (平滑后的实际值)
@@ -414,8 +419,8 @@ class SpriteBrain:
             self.target_params["ParamAngleX"] = mx * head_max * cfg["head_sensitivity"] + cfg.get("offset_angle_x", 0.0)
             # 头部上下旋转 + 偏移补偿
             self.target_params["ParamAngleY"] = my * head_max * cfg["head_sensitivity"] + cfg.get("offset_angle_y", 0.0)
-            # 头部倾斜 - 随左右移动轻微倾斜增加自然感
-            self.target_params["ParamAngleZ"] = mx * head_max * 0.3 * cfg["head_sensitivity"]
+            # 头部倾斜 - 随左右移动轻微倾斜增加自然感 + 基础偏移
+            self.target_params["ParamAngleZ"] = mx * head_max * 0.3 * cfg["head_sensitivity"] + cfg.get("offset_angle_z", 0.0)
             
             # === 身体跟随 (延迟于头部，增加层次感) ===
             # 身体左右旋转 - 跟随头部但幅度较小 + 偏移补偿
@@ -517,9 +522,90 @@ class SpriteBrain:
                 await self.speak(msg)
                 water_timer = 0
 
+    # === 🚨 HTTP API 服务器 (供后端调用) ===
+    async def _handle_http_command(self, request):
+        """处理来自后端的 HTTP 命令请求"""
+        try:
+            data = await request.json()
+            cmd_type = data.get("type")
+            cmd_data = data.get("data", {})
+            
+            if not cmd_type:
+                return web.json_response({"success": False, "error": "Missing 'type' field"}, status=400)
+            
+            logger.info(f"🌐 HTTP API 收到命令: {cmd_type}")
+            
+            # 🚨 拦截 speak 命令，让雪莉说话时正视前方
+            if cmd_type == "speak":
+                self.mouse_config["enabled"] = False
+                await self._reset_to_center()
+                
+                # 估算语音长度，文字越长注视时间越久 (大致每字0.25秒 + 1秒缓冲)
+                text = cmd_data.get("text", "")
+                duration = max(2.0, len(text) * 0.25 + 1.0)
+                
+                async def restore_mouse():
+                    await asyncio.sleep(duration)
+                    self.mouse_config["enabled"] = True
+                    logger.info("🐭 语音结束，恢复鼠标跟随")
+                
+                asyncio.create_task(restore_mouse())
+
+            # 转发到 WebSocket
+            success = await self.send_command(cmd_type, cmd_data)
+            
+            if success:
+                return web.json_response({"success": True, "message": f"Command '{cmd_type}' sent"})
+            else:
+                return web.json_response({"success": False, "error": "WebSocket not connected"}, status=503)
+                
+        except json.JSONDecodeError:
+            return web.json_response({"success": False, "error": "Invalid JSON"}, status=400)
+        except Exception as e:
+            logger.error(f"HTTP API 错误: {e}")
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+    
+    async def _handle_http_health(self, request):
+        """健康检查端点"""
+        return web.json_response({
+            "status": "ok",
+            "websocket_connected": self.ws is not None,
+            "current_mood": self.mood.current_mood if hasattr(self, 'mood') else "unknown",
+            "affection": self.mood.affection_level if hasattr(self, 'mood') else 0
+        })
+    
+    async def _start_http_server(self):
+        """启动 HTTP API 服务器"""
+        app = web.Application()
+        app.router.add_post("/api/command", self._handle_http_command)
+        app.router.add_get("/health", self._handle_http_health)
+        
+        self.http_runner = web.AppRunner(app)
+        await self.http_runner.setup()
+        
+        self.http_site = web.TCPSite(self.http_runner, "127.0.0.1", self.http_port)
+        await self.http_site.start()
+        
+        logger.info(f"🌐 HTTP API 服务器已启动: http://127.0.0.1:{self.http_port}")
+        logger.info(f"   - POST /api/command  - 发送 WebSocket 命令")
+        logger.info(f"   - GET  /health       - 健康检查")
+    
+    async def _stop_http_server(self):
+        """停止 HTTP API 服务器"""
+        if self.http_runner:
+            await self.http_runner.cleanup()
+            logger.info("🌐 HTTP API 服务器已停止")
+
     async def start(self):
         self.running = True
+        # 启动 HTTP 服务器作为独立任务
+        http_task = asyncio.create_task(self._start_http_server())
+        # 等待 HTTP 服务器启动完成
+        await asyncio.sleep(0.5)
+        # 启动主连接循环
         await self.connect()
+        # 清理 HTTP 服务器
+        await self._stop_http_server()
 
     def stop(self):
         self.running = False
