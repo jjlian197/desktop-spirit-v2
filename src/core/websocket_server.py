@@ -40,6 +40,9 @@ class WebSocketServer:
         # 🚨 【触觉反馈】跨线程消息队列
         self._message_queue = asyncio.Queue()
         
+        # 🚨 TTS 开关状态
+        self._tts_enabled = True
+        
         self.tts_manager: Optional[TTSManager] = None
         if HAS_TTS:
             try:
@@ -49,6 +52,11 @@ class WebSocketServer:
                 logger.error(f"Failed to initialize TTS manager: {e}")
         self.lip_sync = LipSyncWebSocketBroadcaster(self.tts_manager, self.clients, self.loop)
         self.lip_sync.start()
+    
+    def set_tts_enabled(self, enabled: bool):
+        """Set TTS enabled/disabled state"""
+        self._tts_enabled = enabled
+        logger.info(f"🗣️ WebSocket server TTS state: {'enabled' if enabled else 'disabled'}")
         
     
     def start(self):
@@ -148,6 +156,8 @@ class WebSocketServer:
                 await self._handle_status(websocket)
             elif msg_type == "window":
                 await self._handle_window(msg_data, websocket)
+            elif msg_type == "tts_config":
+                await self._handle_tts_config(msg_data, websocket)
             else:
                 await self._send_error(websocket, f"Unknown message type: {msg_type}")
 
@@ -354,6 +364,18 @@ class WebSocketServer:
             Q_ARG(int, 5000)
         )
 
+        # 🚨 Check if TTS is enabled
+        if not self._tts_enabled:
+            logger.debug(f"🗣️ TTS is disabled, showing text only: {text[:50]}...")
+            # Still show lip sync animation based on text length
+            await self._simulate_lip_sync(text)
+            await self._send_response(websocket, "speak_completed", {
+                "text": text,
+                "provider": "tts_disabled",
+                "note": "TTS is disabled, lip sync simulated"
+            })
+            return
+
         # Use TTS manager for speech
         if self.tts_manager and HAS_TTS:
             try:
@@ -396,6 +418,16 @@ class WebSocketServer:
             except Exception as e:
                 logger.warning(f"Fallback TTS failed: {e}")
                 await self._send_error(websocket, f"TTS unavailable: {str(e)}")
+
+    async def _handle_tts_config(self, data: dict, websocket: WebSocketServerProtocol):
+        """Handle TTS configuration updates"""
+        enabled = data.get("enabled")
+        if enabled is not None:
+            self._tts_enabled = bool(enabled)
+            logger.info(f"🗣️ TTS {'enabled' if self._tts_enabled else 'disabled'} via WebSocket")
+            await self._send_response(websocket, "tts_config_updated", {
+                "tts_enabled": self._tts_enabled
+            })
 
     async def _handle_status(self, websocket: WebSocketServerProtocol):
         """Handle status request"""
@@ -487,6 +519,55 @@ class WebSocketServer:
             await websocket.send(json.dumps(response))
         except Exception as e:
             logger.error(f"Failed to send error: {e}")
+
+    async def _simulate_lip_sync(self, text: str):
+        """Simulate lip sync animation when TTS is disabled"""
+        import asyncio
+        # Estimate duration based on text length (roughly 5 chars per second)
+        duration_ms = max(1000, len(text) * 200)
+        duration_sec = duration_ms / 1000
+        
+        logger.debug(f"🎭 Simulating lip sync for {duration_sec:.1f}s")
+        
+        # Simulate mouth opening/closing
+        start_time = asyncio.get_event_loop().time()
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= duration_sec:
+                break
+            
+            # Create a simple oscillating mouth value (0.0 - 0.7)
+            import math
+            value = 0.3 + 0.4 * math.sin(elapsed * 10)
+            
+            # Broadcast to clients
+            await self._broadcast_lip_sync(value)
+            
+            await asyncio.sleep(0.05)  # 20fps
+        
+        # Reset mouth to closed
+        await self._broadcast_lip_sync(0.0)
+
+    async def _broadcast_lip_sync(self, value: float):
+        """Broadcast lip sync value to all clients"""
+        try:
+            message = {
+                "type": "lip_sync",
+                "data": {
+                    "param_id": "ParamMouthOpenY",
+                    "value": value,
+                    "timestamp": asyncio.get_event_loop().time()
+                }
+            }
+            
+            # Send to all connected clients
+            for client in self.clients:
+                try:
+                    await client.send(json.dumps(message))
+                except Exception:
+                    pass  # Client may have disconnected
+        except Exception as e:
+            logger.debug(f"Failed to broadcast lip sync: {e}")
 
     def broadcast_sync(self, msg_type: str, data: dict):
         """🚨 【触觉反馈】线程安全的广播方法（供 Qt 线程调用）"""

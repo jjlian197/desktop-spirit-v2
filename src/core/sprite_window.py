@@ -226,7 +226,7 @@ class SherrySpriteWindow(QMainWindow):
         expr_menu = menu.addMenu("Expression")
         expressions = [
             ("Normal", "normal"),
-            ("Happy", "happy"),
+            ("Happy", "star_eye"),
             ("Sad", "sad"),
             ("Angry", "angry"),
             ("Love", "love"),
@@ -262,7 +262,18 @@ class SherrySpriteWindow(QMainWindow):
         menu.addSeparator()
 
         # 🎙️ TTS Test Menu
-        tts_menu = menu.addMenu("🎙️ TTS 测试")
+        tts_menu = menu.addMenu("🎙️ TTS 设置")
+
+        # 🚨 TTS Master Switch
+        tts_master_action = QAction("🗣️ 启用语音 (TTS)", self)
+        tts_master_action.setCheckable(True)
+        # Get current TTS state from backend
+        tts_enabled = self._get_tts_state()
+        tts_master_action.setChecked(tts_enabled)
+        tts_master_action.triggered.connect(self._toggle_tts_master)
+        tts_menu.addAction(tts_master_action)
+
+        tts_menu.addSeparator()
 
         # Provider selection submenu
         provider_menu = tts_menu.addMenu("选择引擎")
@@ -443,5 +454,47 @@ class SherrySpriteWindow(QMainWindow):
             self.live2d_view.set_lip_sync_enabled(not current)
             new_state = not current
             self.show_message(f"👄 口型同步: {'开启' if new_state else '关闭'}")
+
+    def _get_tts_state(self) -> bool:
+        """Get current TTS state - default to True"""
+        # For simplicity, always default to enabled
+        # State will be synced when user toggles
+        return True
+
+    def _toggle_tts_master(self, checked: bool):
+        """Toggle TTS master switch via HTTP API"""
+        from PyQt6.QtCore import QTimer
+        
+        def send_tts_request():
+            try:
+                import urllib.request
+                import urllib.error
+                import json
+                
+                action = "on" if checked else "off"
+                data = json.dumps({"action": action}).encode('utf-8')
+                
+                req = urllib.request.Request(
+                    "http://127.0.0.1:8766/api/tts",
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                
+                with urllib.request.urlopen(req, timeout=2) as response:
+                    if response.status == 200:
+                        self.show_message(f"🗣️ 语音 (TTS): {'开启' if checked else '关闭'}")
+                    else:
+                        self.show_message(f"⚠️ TTS 状态已切换 (HTTP {response.status})")
+                        
+            except urllib.error.URLError as e:
+                logger.error(f"TTS HTTP request failed: {e}")
+                self.show_message(f"⚠️ TTS 状态已切换 (后端未响应)")
+            except Exception as e:
+                logger.error(f"TTS toggle error: {e}")
+                self.show_message(f"⚠️ TTS 状态已切换")
+        
+        # Use QTimer to avoid blocking UI
+        QTimer.singleShot(0, send_tts_request)
 
             

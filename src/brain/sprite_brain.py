@@ -106,6 +106,12 @@ class SpriteBrain:
         self.is_idle = False                      # 当前是否处于空闲状态
         self.idle_motion_playing = False          # 是否正在播放待机动画
         
+        # 🚨 TTS 配置
+        self.tts_config = {
+            "enabled": True,           # 是否启用语音（TTS）
+        }
+        logger.info(f"🗣️ TTS 状态: {'开启' if self.tts_config['enabled'] else '关闭'}")
+        
         try:
             self.screen = AppKit.NSScreen.mainScreen()
             self.screen_width = self.screen.frame().size.width
@@ -205,27 +211,62 @@ class SpriteBrain:
         
         logger.info("✅ 模型已复位到正前方")
 
-    async def speak(self, text: str):
-        self.reset_idle_timer()  # 🚨 说话交互，重置空闲计时
+    async def speak(self, text: str, interactive: bool = True):
+        """
+        说话
+        Args:
+            text: 要说的内容
+            interactive: 是否为用户交互（会影响空闲计时器）
+        """
+        if interactive:
+            self.reset_idle_timer("speak")  # 🚨 用户交互，重置空闲计时
+        
+        # 🚨 检查 TTS 开关
+        if not self.tts_config["enabled"]:
+            logger.debug(f"🗣️ TTS 已关闭，跳过语音: {text[:20]}...")
+            return True  # 返回成功，但不实际播放
+        
         return await self.send_command("speak", {"text": text})
 
-    async def trigger_motion(self, group: str):
-        self.reset_idle_timer()  # 🚨 动作交互，重置空闲计时
+    async def trigger_motion(self, group: str, interactive: bool = True):
+        """
+        触发动作
+        Args:
+            group: 动作组名
+            interactive: 是否为用户交互（会影响空闲计时器）
+        """
+        if interactive:
+            self.reset_idle_timer("motion")  # 🚨 用户交互，重置空闲计时
         return await self.send_command("motion", {"group": group})
     
-    async def set_expression(self, expression_name: str):
-        self.reset_idle_timer()  # 🚨 表情交互，重置空闲计时
+    async def set_expression(self, expression_name: str, interactive: bool = True):
+        """
+        设置表情
+        Args:
+            expression_name: 表情名称
+            interactive: 是否为用户交互（会影响空闲计时器）
+        """
+        if interactive:
+            self.reset_idle_timer("expression")  # 🚨 用户交互，重置空闲计时
         return await self.send_command("expression", {"name": expression_name})
     
     # 🚨 重置空闲计时器（在任何交互时调用）
-    def reset_idle_timer(self):
+    def reset_idle_timer(self, source: str = ""):
         """重置空闲计时器，标记为非空闲状态"""
+        import traceback
+        caller = traceback.extract_stack()[-2]  # 获取调用者信息
+        caller_info = f"{caller.filename.split('/')[-1]}:{caller.lineno}"
+        if source:
+            caller_info = f"{source} ({caller_info})"
+        
         self.last_interaction_time = time.time()
         was_idle = self.is_idle
         self.is_idle = False
         self.idle_motion_playing = False
         if was_idle:
-            logger.info("👋 主人回来啦！退出空闲状态")
+            logger.info(f"👋 主人回来啦！退出空闲状态 (来源: {caller_info})")
+        else:
+            logger.info(f"🔄 空闲计时器重置 (来源: {caller_info})")
     
     # 🚨 空闲动画循环
     async def _idle_loop(self):
@@ -250,20 +291,28 @@ class SpriteBrain:
             # 空闲状态下播放待机动画
             if self.is_idle and not self.idle_motion_playing:
                 self.idle_motion_playing = True
-                logger.debug("🎬 播放待机动画...")
-                await self.send_command("motion", {"group": "Idle"})
+                logger.info("🎬 播放待机动画...")
+                result = await self.send_command("motion", {"group": "Idle"})
+                logger.info(f"📤 待机动画发送结果: {result}")
                 # 等待动画播放完成（6秒）
                 await asyncio.sleep(self.idle_config["motion_interval"])
                 self.idle_motion_playing = False
                 
-                # 随机眨眼（30%概率）
+                # 随机眨眼（30%概率）- 空闲状态，不重置计时器
+                # 使用 parameter_batch 直接控制眼睛开闭参数，避免表情映射问题
                 if self.idle_config["random_blink"] and random.random() < 0.3:
-                    await self.send_command("expression", {"name": "happy"})
-                    await asyncio.sleep(0.1)
-                    await self.send_command("expression", {"name": "normal"})
-                    logger.debug("😉 空闲眨眼")
+                    # 闭眼
+                    await self.send_command("parameter_batch", {
+                        "params": {"ParamEyeLOpen": 0.0, "ParamEyeROpen": 0.0}
+                    })
+                    await asyncio.sleep(0.15)
+                    # 睁眼
+                    await self.send_command("parameter_batch", {
+                        "params": {"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0}
+                    })
+                    logger.info("😉 空闲眨眼")
                 
-                # 随机叹气/说话（10%概率）
+                # 随机叹气/说话（10%概率）- 空闲状态，不重置计时器
                 if self.idle_config["random_sigh"] and random.random() < 0.1:
                     sighs = [
                         "好无聊啊...",
@@ -271,7 +320,7 @@ class SpriteBrain:
                         "雪莉有点困了...",
                         "哼...都不理雪莉...",
                     ]
-                    await self.speak(random.choice(sighs))
+                    await self.speak(random.choice(sighs), interactive=False)
             
             await asyncio.sleep(0.5)
 
@@ -288,8 +337,9 @@ class SpriteBrain:
                 msg_type = data.get("type")
                 msg_data = data.get("data", {})
                 
-                # 🚨 任何消息都视为交互，重置空闲计时器
-                self.reset_idle_timer()
+                # 🚨 只有触摸事件和明确的用户命令才重置空闲计时器（避免系统消息干扰）
+                if msg_type in ("touch_event", "external_command"):
+                    self.reset_idle_timer(f"ws:{msg_type}")
                 
                 # 🚨 【触觉反馈 - 第二步】处理触摸事件
                 if msg_type == "touch_event":
@@ -552,7 +602,7 @@ class SpriteBrain:
             old_affection = self.mood.affection_level
             self.mood.update()
             current_expr = self.mood.get_current_expression()
-            await self.set_expression(current_expr)
+            await self.set_expression(current_expr, interactive=False)  # 自动更新表情，不重置空闲计时
             
             # 🚨 每60秒报告一次好感度状态
             if mood_check_timer >= 60:
@@ -566,40 +616,40 @@ class SpriteBrain:
                 else:
                     logger.info(f"💕 当前好感度: {affection} ({tier_desc})，解锁: {unlocked}")
                 
-                # 根据好感度给主人提示
+                # 根据好感度给主人提示（自动触发，不重置空闲计时）
                 if affection < 30:
                     await self.speak(random.choice([
                         "哼...主人都不理雪莉...",
                         "雪莉生气了啦...",
                         "再不理我，我就要黑化了...",
-                    ]))
+                    ]), interactive=False)
                 elif affection > 80:
                     await self.speak(random.choice([
                         "主人～雪莉最喜欢你了！",
                         "好想一直和主人在一起～",
                         "主人摸摸～",
-                    ]))
+                    ]), interactive=False)
             
             # 2. 随机自主行为
-            if random.random() < 0.15: # 15% 概率说话或做动作
+            #if random.random() < 0.15: # 15% 概率说话或做动作
                 # 检查系统状态 (CPU负载) - 使用线程池避免阻塞
-                loop = asyncio.get_event_loop()
-                cpu_load = await loop.run_in_executor(None, psutil.cpu_percent)
-                if cpu_load > 80:
-                    msg = self.soul.get_quote("system_heavy")
-                    await self.set_expression("surprised")
-                    await self.speak(msg)
-                else:
-                    msg = self.soul.get_soulful_response(self.mood.current_mood)
-                    await self.speak(msg)
-                    if "困" in msg: await self.trigger_motion("idle")
+                #loop = asyncio.get_event_loop()
+                #cpu_load = await loop.run_in_executor(None, psutil.cpu_percent)
+                #if cpu_load > 80:
+                    #msg = self.soul.get_quote("system_heavy")
+                    #await self.set_expression("surprised")
+                    #await self.speak(msg)
+                #else:
+                    #msg = self.soul.get_soulful_response(self.mood.current_mood)
+                    #await self.speak(msg)
+                    #if "困" in msg: await self.trigger_motion("idle")
 
             # 3. 定时提醒 (每45分钟提醒喝水)
             water_timer += 10
             if water_timer >= 2700:
                 msg = self.soul.get_soulful_response(self.mood.current_mood, event="remind_water")
-                await self.set_expression("surprised")
-                await self.speak(msg)
+                await self.set_expression("surprised", interactive=False)
+                await self.speak(msg, interactive=False)
                 water_timer = 0
 
     # === 🚨 HTTP API 服务器 (供后端调用) ===
@@ -616,7 +666,7 @@ class SpriteBrain:
             logger.info(f"🌐 HTTP API 收到命令: {cmd_type}")
             
             # 🚨 HTTP API 调用视为交互，重置空闲计时器
-            self.reset_idle_timer()
+            self.reset_idle_timer(f"http:{cmd_type}")
             
             # 🚨 拦截 speak 命令，让雪莉说话时正视前方
             if cmd_type == "speak":
@@ -648,6 +698,53 @@ class SpriteBrain:
             logger.error(f"HTTP API 错误: {e}")
             return web.json_response({"success": False, "error": str(e)}, status=500)
     
+    async def _handle_http_tts(self, request):
+        """TTS 开关控制端点"""
+        try:
+            data = await request.json()
+            action = data.get("action", "status")  # toggle, on, off, status
+            
+            if action == "toggle":
+                self.tts_config["enabled"] = not self.tts_config["enabled"]
+                status = "开启" if self.tts_config["enabled"] else "关闭"
+                logger.info(f"🗣️ TTS 已{status}")
+                # Notify WebSocket server about TTS state change
+                await self.send_command("tts_config", {"enabled": self.tts_config["enabled"]})
+                return web.json_response({
+                    "success": True,
+                    "tts_enabled": self.tts_config["enabled"],
+                    "message": f"TTS 已{status}"
+                })
+            elif action == "on":
+                self.tts_config["enabled"] = True
+                logger.info("🗣️ TTS 已开启")
+                # Notify WebSocket server about TTS state change
+                await self.send_command("tts_config", {"enabled": True})
+                return web.json_response({
+                    "success": True,
+                    "tts_enabled": True,
+                    "message": "TTS 已开启"
+                })
+            elif action == "off":
+                self.tts_config["enabled"] = False
+                logger.info("🗣️ TTS 已关闭")
+                # Notify WebSocket server about TTS state change
+                await self.send_command("tts_config", {"enabled": False})
+                return web.json_response({
+                    "success": True,
+                    "tts_enabled": False,
+                    "message": "TTS 已关闭"
+                })
+            else:  # status
+                return web.json_response({
+                    "success": True,
+                    "tts_enabled": self.tts_config["enabled"],
+                    "message": "TTS 状态查询"
+                })
+        except Exception as e:
+            logger.error(f"TTS API 错误: {e}")
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+    
     async def _handle_http_health(self, request):
         """健康检查端点"""
         idle_time = time.time() - self.last_interaction_time if hasattr(self, 'last_interaction_time') else 0
@@ -657,6 +754,7 @@ class SpriteBrain:
             "current_mood": self.mood.current_mood if hasattr(self, 'mood') else "unknown",
             "affection": self.mood.affection_level if hasattr(self, 'mood') else 0,
             "is_idle": getattr(self, 'is_idle', False),
+            "tts_enabled": getattr(self.tts_config, 'enabled', True) if hasattr(self, 'tts_config') else True,
             "idle_time": round(idle_time, 1),
             "idle_timeout": getattr(self.idle_config, 'idle_timeout', 30) if hasattr(self, 'idle_config') else 30
         })
@@ -666,6 +764,7 @@ class SpriteBrain:
         app = web.Application()
         app.router.add_post("/api/command", self._handle_http_command)
         app.router.add_get("/health", self._handle_http_health)
+        app.router.add_post("/api/tts", self._handle_http_tts)  # 🚨 TTS 控制端点
         
         self.http_runner = web.AppRunner(app)
         await self.http_runner.setup()
@@ -675,6 +774,7 @@ class SpriteBrain:
         
         logger.info(f"🌐 HTTP API 服务器已启动: http://127.0.0.1:{self.http_port}")
         logger.info(f"   - POST /api/command  - 发送 WebSocket 命令")
+        logger.info(f"   - POST /api/tts      - TTS 开关控制")
         logger.info(f"   - GET  /health       - 健康检查")
     
     async def _stop_http_server(self):

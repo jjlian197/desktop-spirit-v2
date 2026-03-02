@@ -31,6 +31,14 @@ except ImportError as e:
     HAS_LIVE2D = False
     logger.warning(f"live2d-py not installed: {e}")
 
+# Import MotionPlayer
+try:
+    from src.core.motion_player import MotionPlayer
+    HAS_MOTION_PLAYER = True
+except ImportError:
+    HAS_MOTION_PLAYER = False
+    logger.warning("MotionPlayer not available")
+
 # Import TTS Manager for lip sync
 try:
     from src.core.tts_manager import TTSManager, get_tts_manager
@@ -48,8 +56,9 @@ class Live2DView(QOpenGLWidget):
     
     # 参数化表情映射表 - 直接操作底层参数，彻底规避 AddExpression 导致的闪退
     # 🚨 【好感度解锁表情】只有这些参数是模型中实际存在的
+    # 注意：对于复合表情（需要设置多个参数），使用列表格式 [("param", value), ...]
     EXPRESSION_PARAM_MAP = {
-        "happy": "Key17",       # 星星眼
+        "happy": [("ParamEyeLSmile", 1.0), ("ParamEyeRSmile", 1.0)],  # 微笑（眼睛弯弯）
         "sad": "Key20",         # 哭哭
         "angry": "Key14",       # 生气 (<30好感度)
         "love": "Key32",        # 比心 (>80好感度)
@@ -148,6 +157,10 @@ class Live2DView(QOpenGLWidget):
         self._lip_sync_timer = QTimer(self)
         self._lip_sync_timer.timeout.connect(self._update_lip_sync)
         self._lip_sync_timer.start(16)  # ~60fps
+        
+        # Motion player for fallback when StartMotion doesn't work
+        self._motion_player: Optional[MotionPlayer] = None
+        self._motion_files: Dict[str, Path] = {}
 
         # Connect to TTS manager for lip sync
         self._connect_tts_manager()
@@ -281,28 +294,39 @@ class Live2DView(QOpenGLWidget):
             return False
     
     def _preload_motions(self, model_dir: Path):
-        """🚨 预加载动作文件到模型"""
+        """🚨 预加载动作文件到模型 - 同时注册到 MotionPlayer 作为备选"""
         if not self.model or not HAS_LIVE2D:
             return
         
-        motion_files = list(model_dir.glob("*.motion3.json"))
-        logger.info(f"🔍 Found {len(motion_files)} motion files")
+        # 动作组映射：动作组名 -> 文件名
+        motion_mapping = {
+            "Tap": "摸摸头.motion3.json",
+            "Idle": "待机动画.motion3.json",
+        }
         
-        for motion_file in motion_files:
+        logger.info(f"🔍 Loading motions for groups: {list(motion_mapping.keys())}")
+        
+        # 初始化 MotionPlayer
+        if HAS_MOTION_PLAYER:
+            self._motion_player = MotionPlayer(self._set_motion_param)
+        
+        for group_name, filename in motion_mapping.items():
+            motion_file = model_dir / filename
+            if not motion_file.exists():
+                logger.warning(f"⚠️ Motion file not found: {motion_file}")
+                continue
+            
+            # 保存文件路径供 MotionPlayer 使用
+            self._motion_files[group_name] = motion_file
+            logger.info(f"✅ Registered motion: {group_name} -> {filename}")
+    
+    def _set_motion_param(self, param_id: str, value: float):
+        """MotionPlayer 的参数设置回调"""
+        if self.model and HAS_LIVE2D:
             try:
-                # 从文件名提取动作名称
-                motion_name = motion_file.stem
-                
-                # 尝试使用 live2d 加载动作
-                # 注意：不同版本的 live2d-py API 可能不同
-                if hasattr(self.model, 'LoadMotion'):
-                    self.model.LoadMotion(motion_name, str(motion_file), 1000, 1000)
-                    logger.info(f"✅ Preloaded motion: {motion_name}")
-                else:
-                    # 如果模型已经通过 model3.json 加载了动作，这里跳过
-                    logger.debug(f"Motion loading via model3.json: {motion_name}")
+                self.model.SetParameterValue(param_id, value)
             except Exception as e:
-                logger.debug(f"Note: Could not preload motion {motion_file.name}: {e}")
+                logger.debug(f"Failed to set motion param {param_id}: {e}")
     
     def set_big_head_mode(self, enabled: bool):
         self.is_big_head = enabled
@@ -364,6 +388,7 @@ class Live2DView(QOpenGLWidget):
     def set_expression(self, name: str) -> bool:
         """
         使用参数化方式设置表情，彻底规避闪退风险
+        支持简单参数（str）和复合参数（list of tuples）
         """
         if not self.model or not HAS_LIVE2D:
             return False
@@ -372,8 +397,14 @@ class Live2DView(QOpenGLWidget):
         
         try:
             # 1. 重置所有表情参数为 0.0
-            for param in self.EXPRESSION_PARAM_MAP.values():
-                self.model.SetParameterValue(param, 0.0)
+            for param_def in self.EXPRESSION_PARAM_MAP.values():
+                if isinstance(param_def, str):
+                    # 简单参数
+                    self.model.SetParameterValue(param_def, 0.0)
+                elif isinstance(param_def, list):
+                    # 复合参数 - 重置所有相关参数
+                    for param_id, _ in param_def:
+                        self.model.SetParameterValue(param_id, 0.0)
             
             # 2. 如果是正常模式，到此为止
             if name in ["normal", "reset"]:
@@ -381,20 +412,33 @@ class Live2DView(QOpenGLWidget):
                 return True
                 
             # 3. 设置目标表情参数
-            param_id = self.EXPRESSION_PARAM_MAP.get(name.lower())
-            if param_id is None:
+            param_def = self.EXPRESSION_PARAM_MAP.get(name.lower())
+            if param_def is None:
                 # normal 模式，已经重置过参数了
                 self.current_expression = name
                 logger.info(f"✅ Expression set: {name} (normal mode)")
                 return True
-            elif param_id:
+            elif isinstance(param_def, str):
+                # 简单参数
                 try:
-                    self.model.SetParameterValue(param_id, 1.0)
+                    self.model.SetParameterValue(param_def, 1.0)
                     self.current_expression = name
-                    logger.info(f"✅ Expression set via parameter: {name} ({param_id}=1.0)")
+                    logger.info(f"✅ Expression set via parameter: {name} ({param_def}=1.0)")
                     return True
                 except Exception as e:
-                    logger.error(f"Failed to set parameter {param_id}: {e}")
+                    logger.error(f"Failed to set parameter {param_def}: {e}")
+                    return False
+            elif isinstance(param_def, list):
+                # 复合参数 - 设置多个参数
+                try:
+                    for param_id, value in param_def:
+                        self.model.SetParameterValue(param_id, value)
+                    self.current_expression = name
+                    param_names = ", ".join([p[0] for p in param_def])
+                    logger.info(f"✅ Expression set via parameters: {name} ({param_names})")
+                    return True
+                except Exception as e:
+                    logger.error(f"Failed to set composite expression {name}: {e}")
                     return False
             else:
                 logger.warning(f"Unknown expression name: {name}")
@@ -470,14 +514,31 @@ class Live2DView(QOpenGLWidget):
             logger.warning("Cannot trigger motion: model not loaded")
             return False
         
+        # 首先尝试使用 MotionPlayer（更可靠）
+        if self._motion_player and group in self._motion_files:
+            try:
+                motion_file = self._motion_files[group]
+                logger.info(f"🎬 Playing motion via MotionPlayer: {group}")
+                self._motion_player.play(motion_file, loop=False)
+                return True
+            except Exception as e:
+                logger.warning(f"MotionPlayer failed, falling back to StartMotion: {e}")
+        
+        # 备选：使用原生 StartMotion
         try:
-            # Live2D 使用 StartMotion 触发动画
-            # priority: 0=待机, 1=正常, 2=强制, 3=绝对
-            self.model.StartMotion(group, index, priority=2)
-            logger.info(f"🎬 Motion triggered: {group}[{index}]")
-            return True
+            priority = live2d.MotionPriority.FORCE
+            logger.info(f"🎬 Starting motion: {group}[{index}] (priority={priority})...")
+            result = self.model.StartMotion(group, index, priority)
+            if result is not None:
+                logger.info(f"✅ Motion started: {group}[{index}]")
+                return True
+            else:
+                logger.warning(f"⚠️ StartMotion returned None for: {group}[{index}]")
+                return False
         except Exception as e:
-            logger.debug(f"Motion trigger failed (optional): {e}")
+            logger.error(f"❌ Motion trigger failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
 

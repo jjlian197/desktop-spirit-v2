@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+#
+# 🐱💜 雪莉桌面精灵启动器
+#
+
+import os
+import sys
+import subprocess
+
+# 获取应用包路径
+app_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 项目目录是应用包的父目录
+project_dir = os.path.dirname(app_path)
+
+# 启动脚本路径
+start_script = os.path.join(project_dir, "start_sherry.sh")
+
+# 检查脚本是否存在
+if not os.path.exists(start_script):
+    print(f"Error: {start_script} not found!")
+    sys.exit(1)
+
+# 打开终端并运行脚本
+subprocess.run(["open", "-a", "Terminal", start_script])
