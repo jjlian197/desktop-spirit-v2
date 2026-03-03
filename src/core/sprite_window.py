@@ -127,6 +127,17 @@ class SherrySpriteWindow(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         self.tray_icon = QSystemTrayIcon(self)
+        
+        # 💜 设置托盘图标
+        icon_paths = [
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "sherry.icns"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "sherry.png"),
+        ]
+        for icon_path in icon_paths:
+            if os.path.exists(icon_path):
+                self.tray_icon.setIcon(QIcon(icon_path))
+                break
+        
         tray_menu = QMenu()
         
         show_action = QAction("Show Sherry", self)
@@ -456,9 +467,29 @@ class SherrySpriteWindow(QMainWindow):
             self.show_message(f"👄 口型同步: {'开启' if new_state else '关闭'}")
 
     def _get_tts_state(self) -> bool:
-        """Get current TTS state - default to True"""
-        # For simplicity, always default to enabled
-        # State will be synced when user toggles
+        """Get current TTS state from backend"""
+        try:
+            import urllib.request
+            import urllib.error
+            import json
+            
+            data = json.dumps({"action": "status"}).encode('utf-8')
+            
+            req = urllib.request.Request(
+                "http://127.0.0.1:8766/api/tts",
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            
+            with urllib.request.urlopen(req, timeout=1) as response:
+                if response.status == 200:
+                    result = json.loads(response.read().decode('utf-8'))
+                    return result.get('tts_enabled', True)
+        except Exception as e:
+            logger.debug(f"Failed to get TTS state: {e}")
+        
+        # Default to enabled if backend not available
         return True
 
     def _toggle_tts_master(self, checked: bool):

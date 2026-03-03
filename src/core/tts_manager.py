@@ -313,20 +313,28 @@ class LocalTTSProvider(BaseTTSProvider):
         """Generate audio using local TTS"""
         import platform as pf
         
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        # 💜 使用 .aiff 格式，因为 say 命令默认输出 AIFF
+        with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as f:
             output_path = f.name
         
         try:
             if pf.system() == 'Darwin':  # macOS
                 # Use say command with output to file
-                voice = voice_id or "Ting-Ting"  # Chinese voice
+                # 🚨 新版 macOS 中 Ting-Ting 已被移除，使用 Eddy 或 Flo
+                voice = voice_id or "Eddy"  # Chinese voice (Eddy, Flo, Grandma)
                 cmd = ["say", "-v", voice, "-o", output_path, text]
+                logger.info(f"🎙️ LocalTTS: say -v {voice} '{text[:20]}...'")
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
-                await process.communicate()
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    error_msg = stderr.decode() if stderr else "Unknown error"
+                    logger.error(f"❌ say command failed: {error_msg}")
+                    raise Exception(f"say command failed: {error_msg}")
                 
             elif pf.system() == 'Linux':
                 cmd = ["espeak", "-w", output_path, "-v", "zh", text]
@@ -461,14 +469,27 @@ class AudioAnalyzer:
         if audio_path.endswith('.wav'):
             return audio_path
         
-        # Convert using ffmpeg
+        # 💜 转换 AIFF 到 WAV (macOS say 命令默认输出 AIFF)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             wav_path = f.name
         
         try:
+            # 使用 afconvert (macOS 原生) 或 ffmpeg 转换
+            if audio_path.endswith('.aiff') or audio_path.endswith('.aif'):
+                try:
+                    # 优先使用 macOS 原生的 afconvert
+                    subprocess.run([
+                        "afconvert", "-f", "WAVE", "-d", "LEI16@22050",
+                        audio_path, wav_path
+                    ], capture_output=True, check=True)
+                    return wav_path
+                except:
+                    pass  # 失败则使用 ffmpeg
+            
+            # 使用 ffmpeg 转换
             subprocess.run([
                 "ffmpeg", "-y", "-i", audio_path,
-                "-acodec", "pcm_s16le", "-ar", "24000", "-ac", "1",
+                "-acodec", "pcm_s16le", "-ar", "22050", "-ac", "1",
                 wav_path
             ], capture_output=True, check=True)
             return wav_path
@@ -554,13 +575,14 @@ class TTSManager(QObject):
         """Get list of available provider names"""
         return [name for name, p in self.providers.items() if p.is_available()]
     
-    async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
+    async def speak(self, text: str, voice_id: Optional[str] = None, use_fallback: bool = True) -> TTSResult:
         """
         Generate and play TTS audio with lip sync
         
         Args:
             text: Text to speak
             voice_id: Optional voice ID override
+            use_fallback: Whether to fallback to local TTS on failure
             
         Returns:
             TTSResult with audio info
@@ -575,8 +597,17 @@ class TTSManager(QObject):
         self.tts_started.emit(text)
         
         try:
-            # Generate audio
+            # Generate audio with primary provider
             result = await self.current_provider.speak(text, voice_id)
+            
+            # 💜 如果失败且启用了备用方案，尝试本地 TTS
+            if not result.success and use_fallback:
+                logger.warning("🔄 主要 TTS 失败，尝试备用本地 TTS...")
+                local_provider = self.providers.get("local")
+                if local_provider and local_provider.is_available():
+                    result = await local_provider.speak(text, voice_id)
+                    if result.success:
+                        logger.info("✅ 已切换到本地 TTS (macOS say)")
             
             if not result.success:
                 self.tts_error.emit(result.error or "Unknown TTS error")
