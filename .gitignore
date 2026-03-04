@@ -30,3 +30,4 @@ log/
 build/
 dist/
 *.egg-info/
+desktop-spirit-v2/
