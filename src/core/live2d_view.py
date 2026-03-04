@@ -11,11 +11,44 @@ Uses live2d-py for Python bindings to Live2D Cubism SDK
 
 import os
 import platform
+import sys
 from pathlib import Path
 from typing import Optional, Dict, List
 
 # Check if running on Apple Silicon
 IS_APPLE_SILICON = platform.machine() == 'arm64' and platform.system() == 'Darwin'
+
+
+def get_project_dir() -> str:
+    """
+    💜 获取项目根目录（支持 .app 包、PyInstaller 和普通运行）
+    无论从哪里启动，都能找到正确的资源路径
+    """
+    # 🚨 检查是否是 PyInstaller 打包后的环境
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller 会将资源解压到 sys._MEIPASS 临时目录
+        return sys._MEIPASS
+    
+    # 获取当前文件路径
+    current_file = os.path.abspath(__file__)
+    # src/core/live2d_view.py -> 项目根目录
+    project_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
+    
+    # 检查是否在 .app 包内运行
+    if ".app/Contents/" in project_dir:
+        # 在 .app 包内，找到 .app 的父目录
+        # /path/to/雪莉.app/Contents/Resources/... -> /path/to
+        app_path = project_dir
+        while app_path and not app_path.endswith(".app"):
+            app_path = os.path.dirname(app_path)
+        if app_path:
+            # .app 同级目录应该有 src/assets
+            sibling_dir = os.path.dirname(app_path)
+            # 检查是否是项目目录
+            if os.path.exists(os.path.join(sibling_dir, "src", "assets")):
+                return sibling_dir
+    
+    return project_dir
 
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal, QThread
@@ -125,6 +158,7 @@ class Live2DView(QOpenGLWidget):
         self._live2d_initialized = False
         self._gl_initialized = False
         self._pending_model_path = None
+        self._is_model_loaded = False  # 💜 明确标记模型是否成功加载
 
         self.current_expression = "normal"
         self.is_speaking = False
@@ -223,25 +257,32 @@ class Live2DView(QOpenGLWidget):
             logger.error(f"❌ Failed to resize Live2D viewport: {e}")
             
     def initializeGL(self):
+        logger.info("🎨 OpenGL initializeGL called")
         super().initializeGL()
         
         self._gl_initialized = True
+        logger.info("✅ OpenGL context initialized")
         
         if not HAS_LIVE2D:
+            logger.warning("⚠️ Live2D not available, skipping SDK initialization")
             return
         
         try:
             self.makeCurrent()
+            logger.info("🚀 Initializing Live2D SDK...")
             live2d.glInit()
             live2d.init()
             self._live2d_initialized = True
             logger.info("✅ Live2D SDK initialized successfully")
             
             if self._pending_model_path:
+                logger.info(f"📦 Loading pending model: {self._pending_model_path}")
                 self._do_load_model(self._pending_model_path)
                 self._pending_model_path = None
         except Exception as e:
             logger.error(f"❌ Failed to initialize Live2D: {e}")
+            import traceback
+            traceback.print_exc()
     
     def load_model(self, model_path: str) -> bool:
         if not HAS_LIVE2D:
@@ -255,15 +296,55 @@ class Live2DView(QOpenGLWidget):
         return self._do_load_model(model_path)
     
     def _try_load_pending_model(self):
-        if self._pending_model_path and self._gl_initialized and self._live2d_initialized:
-            self._do_load_model(self._pending_model_path)
-            self._pending_model_path = None
+        if not self._pending_model_path:
+            return
+        
+        if self._gl_initialized and self._live2d_initialized:
+            # 条件满足，加载模型
+            success = self._do_load_model(self._pending_model_path)
+            if success:
+                self._pending_model_path = None
+            else:
+                # 加载失败，稍后重试
+                logger.warning("⚠️ Model load failed, will retry...")
+                QTimer.singleShot(500, self._try_load_pending_model)
+        else:
+            # 条件不满足，稍后重试
+            logger.debug("⏳ Waiting for OpenGL/Live2D initialization...")
+            QTimer.singleShot(100, self._try_load_pending_model)
     
     def _do_load_model(self, model_path: str) -> bool:
+        # 💜 重置模型加载状态
+        self._is_model_loaded = False
+        
+        # 💜 检查 live2d 是否可用
+        if not HAS_LIVE2D or live2d is None:
+            logger.error("❌ Live2D not available")
+            return False
+        
+        # 💜 检查 OpenGL 和 Live2D 是否已初始化
+        if not self._gl_initialized:
+            logger.error("❌ OpenGL not initialized")
+            return False
+        
+        if not self._live2d_initialized:
+            logger.error("❌ Live2D SDK not initialized")
+            return False
+        
+        # 💜 先重置模型，避免残留无效对象
+        self.model = None
+        
         try:
             self.makeCurrent()
-            self.model = live2d.LAppModel()
+            
             model_dir = Path(model_path)
+            
+            # 💜 检查模型目录是否存在
+            if not model_dir.exists():
+                logger.error(f"❌ Model directory does not exist: {model_dir}")
+                return False
+            
+            logger.info(f"📁 Loading model from: {model_dir.absolute()}")
             
             model_json = None
             all_json_files = list(model_dir.glob("*.model3.json"))
@@ -272,15 +353,30 @@ class Live2DView(QOpenGLWidget):
                 break
             
             if not model_json:
+                logger.error(f"❌ No .model3.json file found in {model_dir}")
                 return False
             
-            self.model.LoadModelJson(str(model_json))
+            logger.info(f"📄 Found model JSON: {model_json.name}")
+            
+            # 💜 先创建模型对象，成功后才会赋值给 self.model
+            logger.info("🔧 Creating LAppModel...")
+            model = live2d.LAppModel()
+            if model is None:
+                logger.error("❌ LAppModel() returned None")
+                return False
+            logger.info(f"✅ LAppModel created: {type(model)}")
+            
+            model.LoadModelJson(str(model_json))
             self.model_path = model_path
+            
+            # 💜 成功后才赋值给 self.model
+            self.model = model
             
             # 🚨 预加载动作文件
             self._preload_motions(model_dir)
             
             logger.info(f"✅ Model loaded successfully: {model_json.name}")
+            self._is_model_loaded = True  # 💜 标记模型加载成功
             
             if not self.update_timer.isActive():
                 self.update_timer.start(16)
@@ -291,6 +387,8 @@ class Live2DView(QOpenGLWidget):
             return True
         except Exception as e:
             logger.error(f"❌ Failed to load model: {e}")
+            self.model = None  # 💜 确保失败时模型为 None
+            self._is_model_loaded = False  # 💜 标记模型加载失败
             return False
     
     def _preload_motions(self, model_dir: Path):
@@ -348,13 +446,23 @@ class Live2DView(QOpenGLWidget):
                 glEnable, GL_BLEND, glBlendFunc, GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
                 glClearColor, glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
             )
+            from OpenGL.error import GLError
             
-            # 🚨 【关键】清除为完全透明，让 Qt 背景显示出来
-            glClearColor(0.0, 0.0, 0.0, 0.0)  # 透明黑色
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            # 🚨 【关键】清除背景
+            # 使用很小的非零 alpha 值避免某些 OpenGL 驱动报错
+            try:
+                glClearColor(0.0, 0.0, 0.0, 0.01)  # 接近透明的黑色
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            except GLError:
+                # 如果失败，使用完全不透明黑色
+                try:
+                    glClearColor(0.0, 0.0, 0.0, 1.0)
+                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+                except:
+                    pass  # 忽略 OpenGL 错误
             
-            # 如果没有模型，直接返回（显示红色背景）
-            if not self.model:
+            # 💜 如果模型未加载成功，直接返回
+            if not self._is_model_loaded or not self.model:
                 return
             
             # 启用 premultiplied alpha 混合

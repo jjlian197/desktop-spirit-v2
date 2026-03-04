@@ -40,9 +40,12 @@ fi
 source "$VENV_PATH/bin/activate"
 export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
 
+# 💜 使用虚拟环境的 Python（避免在 Automator/快捷指令中使用系统 Python）
+PYTHON_CMD="$VENV_PATH/bin/python3"
+
 if [ "$1" = "-b" ] || [ "$1" = "--background" ]; then
     # 后台模式
-    nohup python3 -m src.main > "$LOG_FILE" 2>&1 &
+    nohup "$PYTHON_CMD" -m src.main > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     echo "🐱 雪莉已在后台启动 (PID: $!)"
     echo "   日志: tail -f $LOG_FILE"
@@ -50,5 +53,5 @@ if [ "$1" = "-b" ] || [ "$1" = "--background" ]; then
 else
     # 前台模式（推荐开发使用）
     echo "🐱 启动雪莉...（按 Ctrl+C 停止）"
-    python3 -m src.main
+    "$PYTHON_CMD" -m src.main
 fi

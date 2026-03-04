@@ -18,9 +18,11 @@ from loguru import logger
 
 from src.ui.bubble_widget import BubbleWidget
 try:
-    from src.core.live2d_view import Live2DView, HAS_LIVE2D
+    from src.core.live2d_view import Live2DView, HAS_LIVE2D, get_project_dir
 except ImportError:
     HAS_LIVE2D = False
+    def get_project_dir():
+        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import TTS Manager
 try:
@@ -38,7 +40,6 @@ if platform.system() == 'Darwin':
         HAS_MACOS_LEVEL = True
     except ImportError:
         pass
-
 
 class SherrySpriteWindow(QMainWindow):
     """Main window for Sherry Desktop Sprite"""
@@ -86,6 +87,7 @@ class SherrySpriteWindow(QMainWindow):
             Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
         self.setFixedSize(400, 600)
        
         self.setStyleSheet("SherrySpriteWindow { background: transparent; }")
@@ -113,8 +115,15 @@ class SherrySpriteWindow(QMainWindow):
                 self.live2d_view.model_loaded.connect(self._auto_remove_watermark)
                 # 🚨 【触觉反馈】连接触摸信号到窗口级信号
                 self.live2d_view.touched.connect(self._on_touched)
-                # Use built-in model from project assets
-                model_path = os.path.join(os.path.dirname(__file__), "../assets/models/hanamaru")
+                # 💜 使用绝对路径加载模型（支持 .app 包）
+                project_dir = get_project_dir()
+                model_path = os.path.join(project_dir, "src", "assets", "models", "hanamaru")
+                logger.info(f"📦 Loading model from: {model_path}")
+                
+                # 💜 强制创建 OpenGL 上下文
+                self.live2d_view.show()
+                self.live2d_view.update()
+                
                 self.live2d_view.load_model(model_path)
             except Exception as e:
                 logger.error(f"Failed to initialize Live2D: {e}")

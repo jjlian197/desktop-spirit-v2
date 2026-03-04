@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """
 TTS Manager - Text-to-Speech management with multiple providers
-Supports: Edge TTS (default), ElevenLabs, Local TTS
+Supports: Edge TTS (default), ElevenLabs, Local TTS (macOS say)
 Handles audio playback and lip sync integration
+
+Architecture:
+    BaseTTSProvider (abstract)
+    ├── EdgeTTSProvider      # Microsoft Edge TTS (online)
+    ├── ElevenLabsProvider   # ElevenLabs API (premium)
+    └── LocalTTSProvider     # System TTS (macOS say, Linux espeak)
+    
+    AudioAnalyzer            # Audio analysis for lip sync
+    TTSManager              # Central manager with Qt integration
 """
 
 import os
@@ -11,22 +20,35 @@ import tempfile
 import subprocess
 import wave
 import struct
-import numpy as np
+import platform
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Callable, List, Dict, Any
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 
-from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
+import numpy as np
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QMetaObject, Qt, Q_ARG
 from loguru import logger
 
 
+# =============================================================================
+# Utilities
+# =============================================================================
+
 def is_apple_silicon() -> bool:
-    """Check if running on Apple Silicon"""
-    import platform
+    """Check if running on Apple Silicon Mac"""
     return platform.machine() == 'arm64' and platform.system() == 'Darwin'
 
+
+def get_system() -> str:
+    """Get current operating system"""
+    return platform.system()
+
+
+# =============================================================================
+# Data Classes
+# =============================================================================
 
 @dataclass
 class TTSResult:
@@ -39,8 +61,12 @@ class TTSResult:
     error: Optional[str] = None
 
 
+# =============================================================================
+# Base Provider
+# =============================================================================
+
 class BaseTTSProvider(ABC):
-    """Base class for TTS providers"""
+    """Abstract base class for TTS providers"""
     
     def __init__(self, name: str):
         self.name = name
@@ -48,23 +74,29 @@ class BaseTTSProvider(ABC):
     
     @abstractmethod
     async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
-        """Generate and return audio file path"""
+        """Generate speech audio from text"""
         pass
     
     @abstractmethod
     def is_available(self) -> bool:
-        """Check if provider is available"""
+        """Check if provider is available on this system"""
         pass
     
     async def warmup(self):
-        """Warm up the provider (optional)"""
+        """Optional warm-up (e.g., load models)"""
         pass
 
 
+# =============================================================================
+# Provider Implementations
+# =============================================================================
+
 class EdgeTTSProvider(BaseTTSProvider):
     """
-    Edge TTS Provider - Using Microsoft's Edge TTS service
-    Voice: zh-CN-XiaoxiaoNeural (default Chinese female voice)
+    Microsoft Edge TTS Provider
+    - Free online service
+    - Good quality Chinese voice (XiaoxiaoNeural)
+    - Requires internet connection
     """
     
     DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
@@ -74,18 +106,70 @@ class EdgeTTSProvider(BaseTTSProvider):
         self.voice = voice or self.DEFAULT_VOICE
         self.rate = rate
         self.pitch = pitch
-        self._check_edge_tts()
+        self._edge_tts_cmd = self._find_edge_tts()
+        self._initialized = self._edge_tts_cmd is not None
     
-    def _check_edge_tts(self):
-        """Check if edge-tts is installed"""
+    def _find_edge_tts(self) -> Optional[str]:
+        """Find edge-tts executable (venv, PyInstaller bundle, or system PATH)"""
+        import sys
+        
+        # 1. Check PyInstaller bundle (_MEIPASS for onefile, or Resources for .app)
+        if hasattr(sys, '_MEIPASS'):
+            # Try different locations in bundle
+            possible_paths = [
+                os.path.join(sys._MEIPASS, 'edge-tts'),
+                os.path.join(sys._MEIPASS, '..', 'Resources', 'edge-tts'),  # .app bundle
+            ]
+            for path in possible_paths:
+                path = os.path.normpath(path)
+                if os.path.exists(path):
+                    try:
+                        subprocess.run([path, "--version"], 
+                                     capture_output=True, check=True)
+                        logger.info(f"✅ EdgeTTS found in bundle: {path}")
+                        return path
+                    except:
+                        pass
+        
+        # 2. Check macOS .app bundle Resources (when running from .app)
+        executable_dir = os.path.dirname(sys.executable)
+        possible_app_paths = [
+            os.path.join(executable_dir, '..', 'Resources', 'edge-tts'),
+            os.path.join(executable_dir, 'edge-tts'),
+        ]
+        for path in possible_app_paths:
+            path = os.path.normpath(path)
+            if os.path.exists(path):
+                try:
+                    subprocess.run([path, "--version"], 
+                                 capture_output=True, check=True)
+                    logger.info(f"✅ EdgeTTS found in app: {path}")
+                    return path
+                except:
+                    pass
+        
+        # 3. Check virtual environment
+        venv_bin = os.path.dirname(sys.executable)
+        venv_path = os.path.join(venv_bin, "edge-tts")
+        
+        if os.path.exists(venv_path):
+            try:
+                subprocess.run([venv_path, "--version"], 
+                             capture_output=True, check=True)
+                logger.info(f"✅ EdgeTTS found in venv: {venv_path}")
+                return venv_path
+            except subprocess.CalledProcessError:
+                pass
+        
+        # 4. Check system PATH
         try:
             subprocess.run(["edge-tts", "--version"], 
                          capture_output=True, check=True)
-            self._initialized = True
-            logger.info("✅ EdgeTTS provider initialized")
+            logger.info("✅ EdgeTTS found in PATH")
+            return "edge-tts"
         except (subprocess.CalledProcessError, FileNotFoundError):
-            self._initialized = False
-            logger.warning("⚠️ edge-tts not found. Install with: pip install edge-tts")
+            logger.warning("⚠️ edge-tts not found")
+            return None
     
     def is_available(self) -> bool:
         return self._initialized
@@ -93,25 +177,14 @@ class EdgeTTSProvider(BaseTTSProvider):
     async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
         """Generate audio using edge-tts"""
         if not self._initialized:
-            return TTSResult(
-                audio_path="",
-                text=text,
-                duration_ms=0,
-                sample_rate=24000,
-                success=False,
-                error="EdgeTTS not initialized"
-            )
+            return self._error_result(text, "EdgeTTS not initialized")
         
         voice = voice_id or self.voice
-        
-        # Create temp file for audio output
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            output_path = f.name
+        output_path = self._create_temp_file(".mp3")
         
         try:
-            # Build edge-tts command
             cmd = [
-                "edge-tts",
+                self._edge_tts_cmd,
                 "--voice", voice,
                 "--text", text,
                 "--write-media", output_path,
@@ -119,8 +192,8 @@ class EdgeTTSProvider(BaseTTSProvider):
                 "--pitch", self.pitch
             ]
             
-            # Run edge-tts
             logger.info(f"🎙️ EdgeTTS: generating audio for '{text[:30]}...'")
+            
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -131,8 +204,7 @@ class EdgeTTSProvider(BaseTTSProvider):
             if process.returncode != 0:
                 raise Exception(f"EdgeTTS failed: {stderr.decode()}")
             
-            # Get audio duration
-            duration_ms = await self._get_audio_duration(output_path)
+            duration_ms = await self._estimate_duration(text, output_path)
             
             return TTSResult(
                 audio_path=output_path,
@@ -144,40 +216,47 @@ class EdgeTTSProvider(BaseTTSProvider):
             
         except Exception as e:
             logger.error(f"❌ EdgeTTS error: {e}")
-            # Clean up temp file
-            try:
-                os.unlink(output_path)
-            except:
-                pass
-            return TTSResult(
-                audio_path="",
-                text=text,
-                duration_ms=0,
-                sample_rate=24000,
-                success=False,
-                error=str(e)
-            )
+            self._cleanup_file(output_path)
+            return self._error_result(text, str(e))
     
-    async def _get_audio_duration(self, audio_path: str) -> float:
-        """Get audio duration in milliseconds"""
+    async def _estimate_duration(self, text: str, audio_path: str) -> float:
+        """Estimate audio duration (ffprobe or fallback)"""
         try:
-            import subprocess
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", 
                  "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
                 capture_output=True, text=True
             )
-            duration_sec = float(result.stdout.strip())
-            return duration_sec * 1000
+            return float(result.stdout.strip()) * 1000
         except:
-            # Fallback: estimate based on text length
-            return len(text) * 200  # ~200ms per character
+            # Fallback: ~200ms per character for Chinese
+            return len(text) * 200
+    
+    def _create_temp_file(self, suffix: str) -> str:
+        """Create temporary file"""
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+            return f.name
+    
+    def _cleanup_file(self, path: str):
+        """Safely delete file"""
+        try:
+            os.unlink(path)
+        except:
+            pass
+    
+    def _error_result(self, text: str, error: str) -> TTSResult:
+        """Create error result"""
+        return TTSResult(
+            audio_path="", text=text, duration_ms=0,
+            sample_rate=24000, success=False, error=error
+        )
 
 
 class ElevenLabsProvider(BaseTTSProvider):
     """
-    ElevenLabs TTS Provider (Premium quality)
-    Requires API key in environment: ELEVENLABS_API_KEY
+    ElevenLabs TTS Provider
+    - Premium quality voices
+    - Requires API key: ELEVENLABS_API_KEY
     """
     
     DEFAULT_VOICE = "21m00Tcm4TlvDq8ikWAM"  # Rachel
@@ -188,6 +267,7 @@ class ElevenLabsProvider(BaseTTSProvider):
         self.api_key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
         self.voice_id = voice_id or self.DEFAULT_VOICE
         self._initialized = bool(self.api_key)
+        
         if self._initialized:
             logger.info("✅ ElevenLabs provider initialized")
     
@@ -197,19 +277,10 @@ class ElevenLabsProvider(BaseTTSProvider):
     async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
         """Generate audio using ElevenLabs API"""
         if not self._initialized:
-            return TTSResult(
-                audio_path="",
-                text=text,
-                duration_ms=0,
-                sample_rate=44100,
-                success=False,
-                error="ElevenLabs API key not set"
-            )
+            return self._error_result(text, "ElevenLabs API key not set")
         
         voice = voice_id or self.voice_id
-        
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            output_path = f.name
+        output_path = self._create_temp_file(".mp3")
         
         try:
             import aiohttp
@@ -233,15 +304,14 @@ class ElevenLabsProvider(BaseTTSProvider):
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=data) as response:
                     if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(f"ElevenLabs API error: {error_text}")
+                        raise Exception(f"API error: {await response.text()}")
                     
                     audio_data = await response.read()
                     with open(output_path, "wb") as f:
                         f.write(audio_data)
             
-            # Estimate duration
-            duration_ms = len(text) * 180  # ~180ms per character
+            # Estimate duration: ~180ms per character
+            duration_ms = len(text) * 180
             
             return TTSResult(
                 audio_path=output_path,
@@ -253,55 +323,69 @@ class ElevenLabsProvider(BaseTTSProvider):
             
         except Exception as e:
             logger.error(f"❌ ElevenLabs error: {e}")
-            try:
-                os.unlink(output_path)
-            except:
-                pass
-            return TTSResult(
-                audio_path="",
-                text=text,
-                duration_ms=0,
-                sample_rate=44100,
-                success=False,
-                error=str(e)
-            )
+            self._cleanup_file(output_path)
+            return self._error_result(text, str(e))
+    
+    def _create_temp_file(self, suffix: str) -> str:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+            return f.name
+    
+    def _cleanup_file(self, path: str):
+        try:
+            os.unlink(path)
+        except:
+            pass
+    
+    def _error_result(self, text: str, error: str) -> TTSResult:
+        return TTSResult(
+            audio_path="", text=text, duration_ms=0,
+            sample_rate=44100, success=False, error=error
+        )
 
 
 class LocalTTSProvider(BaseTTSProvider):
     """
-    Local TTS Provider using system TTS
-    macOS: say command
-    Linux: espeak or festival
-    Windows: sapi5 via pyttsx3
+    Local System TTS Provider
+    - macOS: say command
+    - Linux: espeak
+    - Windows: pyttsx3 (fallback, direct playback)
     """
+    
+    # macOS Chinese voices (newer macOS versions)
+    MACOS_VOICES = {
+        "zh_female": "mei-jia",  # Chinese female
+        "default": "mei-jia"
+    }
     
     def __init__(self):
         super().__init__("LocalTTS")
-        self.platform = os.uname().sysname if hasattr(os, 'uname') else 'Unknown'
+        self._platform = get_system()
         self._initialized = self._check_availability()
     
     def _check_availability(self) -> bool:
-        """Check local TTS availability"""
-        import platform as pf
+        """Check if local TTS is available"""
+        if self._platform == 'Darwin':
+            try:
+                subprocess.run(["say", "-v", "?"], 
+                             capture_output=True, check=True)
+                logger.info("✅ LocalTTS available (macOS say)")
+                return True
+            except:
+                return False
         
-        if pf.system() == 'Darwin':  # macOS
+        elif self._platform == 'Linux':
             try:
-                subprocess.run(["say", "-v", "?"], capture_output=True, check=True)
-                logger.info("✅ LocalTTS provider initialized (macOS say)")
+                subprocess.run(["which", "espeak"], 
+                             capture_output=True, check=True)
+                logger.info("✅ LocalTTS available (Linux espeak)")
                 return True
             except:
                 return False
-        elif pf.system() == 'Linux':
-            try:
-                subprocess.run(["which", "espeak"], capture_output=True, check=True)
-                logger.info("✅ LocalTTS provider initialized (Linux espeak)")
-                return True
-            except:
-                return False
-        else:
+        
+        else:  # Windows
             try:
                 import pyttsx3
-                logger.info("✅ LocalTTS provider initialized (Windows pyttsx3)")
+                logger.info("✅ LocalTTS available (Windows pyttsx3)")
                 return True
             except ImportError:
                 return False
@@ -311,58 +395,32 @@ class LocalTTSProvider(BaseTTSProvider):
     
     async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
         """Generate audio using local TTS"""
-        import platform as pf
-        
-        # 💜 使用 .aiff 格式，因为 say 命令默认输出 AIFF
-        with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as f:
-            output_path = f.name
+        if self._platform == 'Darwin':
+            return await self._speak_macos(text, voice_id)
+        elif self._platform == 'Linux':
+            return await self._speak_linux(text, voice_id)
+        else:
+            return await self._speak_windows(text)
+    
+    async def _speak_macos(self, text: str, voice_id: Optional[str]) -> TTSResult:
+        """macOS: use say command with AIFF output"""
+        output_path = self._create_temp_file(".aiff")
+        voice = voice_id or self.MACOS_VOICES["default"]
         
         try:
-            if pf.system() == 'Darwin':  # macOS
-                # Use say command with output to file
-                # 🚨 新版 macOS 中 Ting-Ting 已被移除，使用 Eddy 或 Flo
-                voice = voice_id or "Eddy"  # Chinese voice (Eddy, Flo, Grandma)
-                cmd = ["say", "-v", voice, "-o", output_path, text]
-                logger.info(f"🎙️ LocalTTS: say -v {voice} '{text[:20]}...'")
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                stdout, stderr = await process.communicate()
-                
-                if process.returncode != 0:
-                    error_msg = stderr.decode() if stderr else "Unknown error"
-                    logger.error(f"❌ say command failed: {error_msg}")
-                    raise Exception(f"say command failed: {error_msg}")
-                
-            elif pf.system() == 'Linux':
-                cmd = ["espeak", "-w", output_path, "-v", "zh", text]
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await process.communicate()
-                
-            else:  # Windows or fallback
-                # Use say command directly without file output
-                # Local TTS on Windows doesn't support file output easily
-                cmd = ["say", text]
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await process.communicate()
-                # Return empty path since we played directly
-                return TTSResult(
-                    audio_path="",
-                    text=text,
-                    duration_ms=len(text) * 200,
-                    sample_rate=22050,
-                    success=True
-                )
+            cmd = ["say", "-v", voice, "-o", output_path, text]
+            logger.info(f"🎙️ LocalTTS (say): '{text[:20]}...'")
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                error = stderr.decode() if stderr else "Unknown error"
+                raise Exception(f"say failed: {error}")
             
             duration_ms = len(text) * 200
             
@@ -375,142 +433,169 @@ class LocalTTSProvider(BaseTTSProvider):
             )
             
         except Exception as e:
-            logger.error(f"❌ LocalTTS error: {e}")
-            try:
-                os.unlink(output_path)
-            except:
-                pass
+            logger.error(f"❌ macOS say error: {e}")
+            self._cleanup_file(output_path)
+            return self._error_result(text, str(e))
+    
+    async def _speak_linux(self, text: str, voice_id: Optional[str]) -> TTSResult:
+        """Linux: use espeak"""
+        output_path = self._create_temp_file(".wav")
+        
+        try:
+            cmd = ["espeak", "-w", output_path, "-v", "zh", text]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await process.communicate()
+            
+            duration_ms = len(text) * 200
+            
+            return TTSResult(
+                audio_path=output_path,
+                text=text,
+                duration_ms=duration_ms,
+                sample_rate=22050,
+                success=True
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ espeak error: {e}")
+            self._cleanup_file(output_path)
+            return self._error_result(text, str(e))
+    
+    async def _speak_windows(self, text: str) -> TTSResult:
+        """Windows: use pyttsx3 (direct playback, no file)"""
+        try:
+            import pyttsx3
+            engine = pyttsx3.init()
+            engine.say(text)
+            engine.runAndWait()
+            
             return TTSResult(
                 audio_path="",
                 text=text,
-                duration_ms=0,
+                duration_ms=len(text) * 200,
                 sample_rate=22050,
-                success=False,
-                error=str(e)
+                success=True
             )
+            
+        except Exception as e:
+            return self._error_result(text, str(e))
+    
+    def _create_temp_file(self, suffix: str) -> str:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+            return f.name
+    
+    def _cleanup_file(self, path: str):
+        try:
+            os.unlink(path)
+        except:
+            pass
+    
+    def _error_result(self, text: str, error: str) -> TTSResult:
+        return TTSResult(
+            audio_path="", text=text, duration_ms=0,
+            sample_rate=22050, success=False, error=error
+        )
 
+
+# =============================================================================
+# Audio Analysis
+# =============================================================================
 
 class AudioAnalyzer:
     """
-    Audio amplitude analyzer for lip sync
-    Extracts volume/amplitude data from audio files
+    Audio amplitude analyzer for lip sync using ffmpeg
+    
+    Flow: any audio -> ffmpeg -> raw PCM -> numpy analysis
     """
     
     def __init__(self, frame_rate: int = 30):
         self.frame_rate = frame_rate
-        self._executor = ThreadPoolExecutor(max_workers=2)
     
-    def analyze_amplitude(self, audio_path: str) -> List[float]:
-        """
-        Analyze audio file and return amplitude values per frame
-        Returns list of normalized amplitude values (0.0 - 1.0)
-        """
-        try:
-            # Convert to WAV if needed
-            wav_path = self._convert_to_wav(audio_path)
-            
-            # Read WAV file
-            with wave.open(wav_path, 'rb') as wav_file:
-                n_channels = wav_file.getnchannels()
-                sample_width = wav_file.getsampwidth()
-                frame_rate = wav_file.getframerate()
-                n_frames = wav_file.getnframes()
-                
-                # Read all frames
-                raw_data = wav_file.readframes(n_frames)
-                
-                # Convert to numpy array
-                if sample_width == 2:
-                    fmt = f"{n_frames * n_channels}h"
-                    samples = np.array(struct.unpack(fmt, raw_data))
-                elif sample_width == 1:
-                    samples = np.frombuffer(raw_data, dtype=np.uint8)
-                    samples = (samples.astype(np.float32) - 128) / 128.0
-                else:
-                    logger.warning(f"Unsupported sample width: {sample_width}")
-                    return []
-                
-                # Convert to mono
-                if n_channels == 2:
-                    samples = samples[::2]  # Take left channel
-                
-                # Calculate samples per frame
-                samples_per_frame = frame_rate // self.frame_rate
-                n_analysis_frames = len(samples) // samples_per_frame
-                
-                # Calculate amplitude for each frame
-                amplitudes = []
-                for i in range(n_analysis_frames):
-                    start = i * samples_per_frame
-                    end = start + samples_per_frame
-                    frame_samples = samples[start:end]
-                    
-                    # RMS amplitude
-                    rms = np.sqrt(np.mean(frame_samples.astype(np.float64) ** 2))
-                    # Normalize (16-bit audio max value is 32768)
-                    normalized = min(rms / 32768.0 * 8, 1.0)  # Scale up for better sensitivity
-                    amplitudes.append(normalized)
-                
-                # Clean up temp WAV if converted
-                if wav_path != audio_path and os.path.exists(wav_path):
-                    try:
-                        os.unlink(wav_path)
-                    except:
-                        pass
-                
-                return amplitudes
-                
-        except Exception as e:
-            logger.error(f"❌ Audio analysis error: {e}")
-            return []
-    
-    def _convert_to_wav(self, audio_path: str) -> str:
-        """Convert audio file to WAV format if needed"""
-        if audio_path.endswith('.wav'):
-            return audio_path
-        
-        # 💜 转换 AIFF 到 WAV (macOS say 命令默认输出 AIFF)
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            wav_path = f.name
-        
-        try:
-            # 使用 afconvert (macOS 原生) 或 ffmpeg 转换
-            if audio_path.endswith('.aiff') or audio_path.endswith('.aif'):
+    def _find_ffmpeg(self) -> Optional[str]:
+        """Find ffmpeg executable"""
+        possible_paths = [
+            "/opt/homebrew/bin/ffmpeg",  # Apple Silicon Homebrew
+            "/usr/local/bin/ffmpeg",     # Intel Homebrew
+            "/usr/bin/ffmpeg",
+            "ffmpeg"  # PATH
+        ]
+        for path in possible_paths:
+            if path == "ffmpeg" or os.path.exists(path):
                 try:
-                    # 优先使用 macOS 原生的 afconvert
-                    subprocess.run([
-                        "afconvert", "-f", "WAVE", "-d", "LEI16@22050",
-                        audio_path, wav_path
-                    ], capture_output=True, check=True)
-                    return wav_path
+                    subprocess.run([path, "-version"], capture_output=True, check=True)
+                    return path
                 except:
-                    pass  # 失败则使用 ffmpeg
+                    continue
+        return None
+    
+    def analyze(self, audio_path: str) -> List[float]:
+        """Analyze audio and return amplitude values per frame (0.0-1.0)"""
+        ffmpeg_path = self._find_ffmpeg()
+        logger.info(f"🎵 FFmpeg path: {ffmpeg_path}")
+        if ffmpeg_path is None:
+            logger.warning("⚠️ ffmpeg not found, lip sync disabled")
+            return []
+        
+        try:
+            # ffmpeg: convert to 16-bit PCM mono @ 22050Hz
+            cmd = [
+                ffmpeg_path, "-y", "-i", audio_path,
+                "-f", "s16le", "-acodec", "pcm_s16le",
+                "-ar", "22050", "-ac", "1", "-"
+            ]
+            result = subprocess.run(cmd, capture_output=True)
             
-            # 使用 ffmpeg 转换
-            subprocess.run([
-                "ffmpeg", "-y", "-i", audio_path,
-                "-acodec", "pcm_s16le", "-ar", "22050", "-ac", "1",
-                wav_path
-            ], capture_output=True, check=True)
-            return wav_path
+            if result.returncode != 0:
+                logger.error(f"FFmpeg error: {result.stderr.decode()[:100]}")
+                return []
+            
+            # Convert bytes to numpy array (16-bit signed)
+            samples = np.frombuffer(result.stdout, dtype=np.int16)
+            
+            # Calculate RMS per frame (30fps = ~735 samples/frame @ 22050Hz)
+            samples_per_frame = 22050 // self.frame_rate
+            n_frames = len(samples) // samples_per_frame
+            
+            amplitudes = []
+            for i in range(n_frames):
+                frame = samples[i * samples_per_frame : (i + 1) * samples_per_frame]
+                rms = np.sqrt(np.mean(frame.astype(np.float64) ** 2))
+                # Normalize: 16-bit max is 32768, scale up for sensitivity
+                amplitudes.append(min(rms / 32768.0 * 8, 1.0))
+            
+            return amplitudes
+            
         except Exception as e:
-            logger.error(f"FFmpeg conversion failed: {e}")
-            # Return original path and hope for the best
-            return audio_path
+            logger.error(f"Audio analysis error: {e}")
+            return []
 
+
+# =============================================================================
+# TTS Manager (Main Class)
+# =============================================================================
 
 class TTSManager(QObject):
     """
-    TTS Manager - Central manager for text-to-speech operations
-    Handles provider selection, audio playback, and lip sync
+    Central TTS manager with Qt integration
+    
+    Signals:
+        tts_started(text):      TTS playback started
+        tts_finished():         TTS playback finished
+        tts_error(error):       TTS error occurred
+        lip_sync_frame(value):  Mouth open value (0.0-1.0)
+        audio_amplitude(data):  Full amplitude array
     """
     
     # Signals
-    tts_started = pyqtSignal(str)  # text
-    tts_finished = pyqtSignal()  # no params
-    tts_error = pyqtSignal(str)  # error message
-    lip_sync_frame = pyqtSignal(float)  # mouth open value (0.0 - 1.0)
-    audio_amplitude = pyqtSignal(list)  # list of amplitude values
+    tts_started = pyqtSignal(str)
+    tts_finished = pyqtSignal()
+    tts_error = pyqtSignal(str)
+    lip_sync_frame = pyqtSignal(float)
+    audio_amplitude = pyqtSignal(list)
     
     def __init__(self, parent=None, preferred_provider: str = "edge"):
         super().__init__(parent)
@@ -530,15 +615,17 @@ class TTSManager(QObject):
         self._current_audio_path: Optional[str] = None
         self._amplitude_data: List[float] = []
         self._current_frame = 0
+        self._temp_files: List[str] = []
         
-        # Playback timer
+        # Timer for lip sync (30fps)
         self._playback_timer = QTimer(self)
         self._playback_timer.timeout.connect(self._on_playback_frame)
         
-        # Cleanup tracking
-        self._temp_files: List[str] = []
-        
-        logger.info(f"🎙️ TTSManager initialized with provider: {self.current_provider.name}")
+        logger.info(f"🎙️ TTSManager initialized: {self.current_provider.name}")
+    
+    # -------------------------------------------------------------------------
+    # Provider Management
+    # -------------------------------------------------------------------------
     
     def _select_provider(self, preferred: str) -> BaseTTSProvider:
         """Select best available provider"""
@@ -551,9 +638,10 @@ class TTSManager(QObject):
         # Fallback to any available
         for name, provider in self.providers.items():
             if provider.is_available():
+                logger.info(f"🔄 Fallback to {name}")
                 return provider
         
-        # Last resort: local
+        # Last resort: local (may not work but worth a try)
         return self.providers["local"]
     
     def set_provider(self, name: str) -> bool:
@@ -564,32 +652,33 @@ class TTSManager(QObject):
         
         provider = self.providers[name]
         if not provider.is_available():
-            logger.error(f"TTS provider '{name}' is not available")
+            logger.error(f"TTS provider '{name}' not available")
             return False
         
         self.current_provider = provider
-        logger.info(f"🎙️ TTS provider switched to: {name}")
+        logger.info(f"🎙️ TTS provider: {name}")
         return True
     
     def get_available_providers(self) -> List[str]:
         """Get list of available provider names"""
         return [name for name, p in self.providers.items() if p.is_available()]
     
-    async def speak(self, text: str, voice_id: Optional[str] = None, use_fallback: bool = True) -> TTSResult:
+    # -------------------------------------------------------------------------
+    # Speech Synthesis
+    # -------------------------------------------------------------------------
+    
+    async def speak(self, text: str, voice_id: Optional[str] = None, 
+                    use_fallback: bool = True) -> TTSResult:
         """
         Generate and play TTS audio with lip sync
         
         Args:
             text: Text to speak
-            voice_id: Optional voice ID override
-            use_fallback: Whether to fallback to local TTS on failure
-            
-        Returns:
-            TTSResult with audio info
+            voice_id: Optional voice override
+            use_fallback: Try local TTS if primary fails
         """
         if self._is_speaking:
-            logger.warning("TTS already in progress, waiting...")
-            # Wait for current to finish
+            logger.warning("TTS in progress, waiting...")
             while self._is_speaking:
                 await asyncio.sleep(0.1)
         
@@ -597,32 +686,30 @@ class TTSManager(QObject):
         self.tts_started.emit(text)
         
         try:
-            # Generate audio with primary provider
+            # Primary provider
             result = await self.current_provider.speak(text, voice_id)
             
-            # 💜 如果失败且启用了备用方案，尝试本地 TTS
+            # Fallback to local if failed
             if not result.success and use_fallback:
-                logger.warning("🔄 主要 TTS 失败，尝试备用本地 TTS...")
-                local_provider = self.providers.get("local")
-                if local_provider and local_provider.is_available():
-                    result = await local_provider.speak(text, voice_id)
-                    if result.success:
-                        logger.info("✅ 已切换到本地 TTS (macOS say)")
+                logger.warning("🔄 Primary TTS failed, trying local...")
+                local = self.providers.get("local")
+                if local and local.is_available():
+                    result = await local.speak(text, voice_id)
             
             if not result.success:
-                self.tts_error.emit(result.error or "Unknown TTS error")
-                self._is_speaking = False
-                self.tts_finished.emit()
+                self.tts_error.emit(result.error or "TTS error")
+                self._finish_speaking()
                 return result
             
-            # Track temp file for cleanup
+            # Track temp file
             if result.audio_path:
                 self._temp_files.append(result.audio_path)
                 self._current_audio_path = result.audio_path
                 
-                # Analyze audio for lip sync
-                logger.info("🔊 Analyzing audio for lip sync...")
-                self._amplitude_data = self.audio_analyzer.analyze_amplitude(result.audio_path)
+                # Analyze for lip sync
+                logger.info(f"🔊 Analyzing audio for lip sync: {result.audio_path}")
+                self._amplitude_data = self.audio_analyzer.analyze(result.audio_path)
+                logger.info(f"✅ Audio analysis complete: {len(self._amplitude_data)} frames")
                 self.audio_amplitude.emit(self._amplitude_data)
             
             # Play audio
@@ -631,104 +718,152 @@ class TTSManager(QObject):
             return result
             
         except Exception as e:
-            logger.error(f"❌ TTS speak error: {e}")
+            logger.error(f"❌ TTS error: {e}")
             self.tts_error.emit(str(e))
-            self._is_speaking = False
-            self.tts_finished.emit()
+            self._finish_speaking()
             return TTSResult(
-                audio_path="",
-                text=text,
-                duration_ms=0,
-                sample_rate=24000,
-                success=False,
-                error=str(e)
+                audio_path="", text=text, duration_ms=0,
+                sample_rate=24000, success=False, error=str(e)
             )
+    
+    def speak_sync(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
+        """Synchronous wrapper for speak()"""
+        try:
+            return asyncio.run(self.speak(text, voice_id))
+        except Exception as e:
+            logger.error(f"❌ speak_sync error: {e}")
+            raise
+    
+    # -------------------------------------------------------------------------
+    # Audio Playback
+    # -------------------------------------------------------------------------
     
     async def _play_audio(self, audio_path: str):
         """Play audio file with lip sync"""
         if not audio_path or not os.path.exists(audio_path):
             logger.warning("No audio file to play")
-            self._is_speaking = False
-            self.tts_finished.emit()
+            self._finish_speaking()
             return
         
         self._current_frame = 0
         
-        # Start lip sync timer (30fps = 33ms per frame) - MUST BE IN MAIN THREAD
+        # Start lip sync timer (must be in main thread)
         if self._amplitude_data:
-            from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
-            QMetaObject.invokeMethod(self._playback_timer, "start", Qt.ConnectionType.QueuedConnection, Q_ARG(int, 33))
+            QMetaObject.invokeMethod(
+                self._playback_timer, "start",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(int, 33)  # 30fps
+            )
         
-        # Play audio using system player
+        # Play audio
+        logger.info(f"🔊 Playing: {os.path.basename(audio_path)}")
         try:
-            if is_apple_silicon() or os.uname().sysname == 'Darwin':
-                # macOS: use afplay
-                process = await asyncio.create_subprocess_exec(
-                    "afplay", audio_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await process.communicate()
-            else:
-                # Linux/Windows: use ffplay or similar
-                process = await asyncio.create_subprocess_exec(
-                    "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", audio_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await process.communicate()
-                
+            await self._play_with_system_player(audio_path)
         except Exception as e:
-            logger.error(f"❌ Audio playback error: {e}")
+            logger.error(f"❌ Playback error: {e}")
         finally:
-            # Stop lip sync
-            from PyQt6.QtCore import QMetaObject, Qt
-            QMetaObject.invokeMethod(self._playback_timer, "stop", Qt.ConnectionType.QueuedConnection)
-            self.lip_sync_frame.emit(0.0)  # Close mouth
-            self._is_speaking = False
-            self.tts_finished.emit()
+            self._finish_speaking()
+    
+    async def _play_with_system_player(self, audio_path: str):
+        """Play audio using system-native player"""
+        system = get_system()
+        
+        if system == 'Darwin':
+            # macOS: afplay (使用完整路径确保打包后也能找到)
+            afplay_paths = ["/usr/bin/afplay", "/bin/afplay", "afplay"]
+            afplay_cmd = None
+            for path in afplay_paths:
+                if os.path.exists(path):
+                    afplay_cmd = path
+                    break
+            
+            logger.info(f"🎵 afplay path: {afplay_cmd}")
+            if afplay_cmd is None:
+                logger.error("❌ afplay not found")
+                return
+            
+            process = await asyncio.create_subprocess_exec(
+                afplay_cmd, audio_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                stderr_str = stderr.decode() if stderr else "Unknown"
+                logger.error(f"❌ afplay failed: {stderr_str}")
+        
+        else:
+            # Linux/Windows: ffplay
+            process = await asyncio.create_subprocess_exec(
+                "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", audio_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await process.communicate()
+    
+    # -------------------------------------------------------------------------
+    # Lip Sync
+    # -------------------------------------------------------------------------
     
     def _on_playback_frame(self):
-        """Called every frame during audio playback for lip sync"""
+        """Called every frame during playback"""
         if not self._amplitude_data:
             return
         
         if self._current_frame < len(self._amplitude_data):
             amplitude = self._amplitude_data[self._current_frame]
-            
-            # 🚨 【关键优化】：使用非线性映射和阈值优化口型同步
-            # 1. 添加阈值：低于 0.15 的振幅视为静音（嘴巴完全闭合）
-            # 2. 使用幂函数曲线：增强大声时的开口度，减小微声时的开口度
-            threshold = 0.15
-            if amplitude < threshold:
-                mouth_open = 0.0
-            else:
-                # 归一化到 [0, 1] 范围
-                normalized = (amplitude - threshold) / (1.0 - threshold)
-                # 使用指数 1.8 区分轻声和无声
-                mouth_open = min(normalized ** 1.8 * 1.2, 1.0)
-                
+            mouth_open = self._amplitude_to_mouth(amplitude)
             self.lip_sync_frame.emit(mouth_open)
             self._current_frame += 1
         else:
-            # End of audio
             self.lip_sync_frame.emit(0.0)
     
-    def speak_sync(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
-        """Synchronous wrapper for speak()"""
-        return asyncio.run(self.speak(text, voice_id))
+    def _amplitude_to_mouth(self, amplitude: float) -> float:
+        """
+        Convert amplitude to mouth open value
+        Uses non-linear mapping for better lip sync
+        """
+        threshold = 0.15
+        
+        if amplitude < threshold:
+            return 0.0
+        
+        # Normalize and apply curve
+        normalized = (amplitude - threshold) / (1.0 - threshold)
+        return min(normalized ** 1.8 * 1.2, 1.0)
+    
+    # -------------------------------------------------------------------------
+    # State Management
+    # -------------------------------------------------------------------------
+    
+    def _finish_speaking(self):
+        """Clean up after speaking"""
+        QMetaObject.invokeMethod(
+            self._playback_timer, "stop",
+            Qt.ConnectionType.QueuedConnection
+        )
+        self.lip_sync_frame.emit(0.0)
+        self._is_speaking = False
+        self.tts_finished.emit()
     
     def is_speaking(self) -> bool:
         """Check if currently speaking"""
         return self._is_speaking
     
     def stop(self):
-        """Stop current TTS playback"""
-        from PyQt6.QtCore import QMetaObject, Qt
-        QMetaObject.invokeMethod(self._playback_timer, "stop", Qt.ConnectionType.QueuedConnection)
+        """Stop current playback"""
+        QMetaObject.invokeMethod(
+            self._playback_timer, "stop",
+            Qt.ConnectionType.QueuedConnection
+        )
         self._is_speaking = False
         self.lip_sync_frame.emit(0.0)
         self.tts_finished.emit()
+    
+    # -------------------------------------------------------------------------
+    # Cleanup
+    # -------------------------------------------------------------------------
     
     def cleanup(self):
         """Clean up temp files"""
@@ -737,13 +872,16 @@ class TTSManager(QObject):
             try:
                 if os.path.exists(path):
                     os.unlink(path)
-                    logger.debug(f"🗑️ Cleaned up temp file: {path}")
+                    logger.debug(f"🗑️ Cleaned: {path}")
             except Exception as e:
-                logger.warning(f"Failed to cleanup {path}: {e}")
+                logger.warning(f"Cleanup failed: {e}")
         self._temp_files.clear()
 
 
-# Singleton instance
+# =============================================================================
+# Singleton
+# =============================================================================
+
 _tts_manager: Optional[TTSManager] = None
 
 
