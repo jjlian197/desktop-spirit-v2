@@ -18,6 +18,31 @@ from src.core.sprite_window import SherrySpriteWindow
 from src.core.websocket_server import WebSocketServer
 from src.utils.logger import setup_logging
 from src.core.lip_sync_websocket import LipSyncWebSocketBroadcaster
+from src.brain.sprite_brain import SpriteBrain
+from PyQt6.QtCore import QThread
+
+
+class BrainThread(QThread):
+    """在独立线程中运行大脑"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.brain = None
+        
+    def run(self):
+        """线程入口"""
+        import asyncio
+        self.brain = SpriteBrain()
+        try:
+            asyncio.run(self.brain.start())
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"Brain error: {e}")
+    
+    def stop(self):
+        """停止大脑"""
+        if self.brain:
+            self.brain.stop()
 
 def setup_signal_handlers(app):
     """Setup graceful shutdown handlers"""
@@ -33,18 +58,42 @@ class SherryApplication(QApplication):
     """Main Application with exception handling"""
     
     def __init__(self, argv):
+        # Enable high DPI scaling BEFORE calling super().__init__
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+        
         super().__init__(argv)
+        
+        # 设置应用程序图标（Windows 任务栏需要）
+        self._setup_icon()
         
         # Global exception handler
         sys.excepthook = self.handle_exception
         
-        # Enable high DPI scaling
-        self.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-        )
-        
         # Create required directories
         self._ensure_directories()
+    
+    def _setup_icon(self):
+        """设置应用程序图标"""
+        try:
+            from PyQt6.QtGui import QIcon
+            from pathlib import Path
+            import sys
+            
+            # 获取图标路径
+            if hasattr(sys, '_MEIPASS'):
+                icon_path = Path(sys._MEIPASS) / "src" / "assets" / "icon.ico"
+            else:
+                icon_path = Path(__file__).parent / "assets" / "icon.ico"
+            
+            if icon_path.exists():
+                self.setWindowIcon(QIcon(str(icon_path)))
+                logger.info(f"[ICON] Application icon set: {icon_path}")
+            else:
+                logger.warning(f"[ICON] Icon not found: {icon_path}")
+        except Exception as e:
+            logger.warning(f"[ICON] Failed to set icon: {e}")
     
     def _ensure_directories(self):
         """Create required directories"""
@@ -83,14 +132,34 @@ def main():
     ws_server = WebSocketServer(window)
     ws_server.start()
     
+    # 🚨 【触觉反馈】连接触摸事件到 WebSocket 广播
+    def on_touch_event(action, part):
+        """当雪莉被触摸时，广播到大脑（线程安全）"""
+        from loguru import logger
+        logger.info(f"🔄 转发触摸事件: {action} on {part}")
+        # 使用线程安全的广播方法
+        ws_server.broadcast_sync("touch_event", {
+            "action": action,
+            "part": part
+        })
+    
+    window.touch_event.connect(on_touch_event)
+    
     logger.info("✅ Sherry Desktop Sprite started successfully!")
     logger.info("   WebSocket: ws://127.0.0.1:8765/sprite")
+    
+    # Start Brain thread (精灵大脑)
+    brain_thread = BrainThread()
+    brain_thread.start()
+    logger.info("🧠 大脑已启动 (鼠标跟随激活)")
     
     # Run Qt event loop
     exit_code = app.exec()
     
     # Cleanup
     ws_server.stop()
+    brain_thread.stop()
+    brain_thread.wait(2000)  # 等待2秒让大脑优雅退出
     logger.info("👋 Sherry Desktop Sprite stopped.")
     
     return exit_code

@@ -21,6 +21,17 @@ try:
 except ImportError:
     HAS_LIVE2D = False
 
+# Import resource path utility
+try:
+    from src.utils import get_resource_path
+except ImportError:
+    # Fallback if utils not available
+    def get_resource_path(relative_path: str) -> str:
+        """简单的路径处理，仅适用于开发环境"""
+        if hasattr(sys, '_MEIPASS'):
+            return str(Path(sys._MEIPASS) / relative_path)
+        return relative_path
+
 # Import TTS Manager
 try:
     from src.core.tts_manager import TTSManager, get_tts_manager
@@ -46,6 +57,9 @@ class SherrySpriteWindow(QMainWindow):
     expression_changed = pyqtSignal(str)
     motion_triggered = pyqtSignal(str, int)
     message_received = pyqtSignal(str, int)
+    
+    # 🚨 【触觉反馈】触摸事件信号 - 当用户触摸雪莉时发射
+    touch_event = pyqtSignal(str, str)  # (action, part) 例如 ("tap", "head")
 
     def __init__(self):
         super().__init__()
@@ -70,7 +84,12 @@ class SherrySpriteWindow(QMainWindow):
         self._setup_ui()
         self._setup_tray()
         self._position_bottom_right()
-
+        
+        # 显示窗口并记录位置
+        self.show()
+        logger.info(f"[WINDOW] Position: ({self.x()}, {self.y()}), Size: ({self.width()}, {self.height()})")
+        logger.info(f"[WINDOW] Visible: {self.isVisible()}, WindowState: {self.windowState()}")
+        
         logger.info("Sprite window initialized")
 
     def _setup_window(self):
@@ -83,32 +102,71 @@ class SherrySpriteWindow(QMainWindow):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(400, 600)
+        
+        # 设置窗口图标（任务栏显示）
+        icon_path = get_resource_path("src/assets/icon.ico")
+        if Path(icon_path).exists():
+            self.setWindowIcon(QIcon(icon_path))
+            logger.info(f"[ICON] Window icon set: {icon_path}")
+        else:
+            logger.warning(f"[ICON] Window icon not found: {icon_path}")
        
         self.setStyleSheet("SherrySpriteWindow { background: transparent; }")
         
     def _setup_ui(self):
+        # 创建主容器
         self.central_widget = QWidget()
-        self.central_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.central_widget.setObjectName("centralWidget")
-        self.central_widget.setStyleSheet("#centralWidget { background: transparent; }")
         self.setCentralWidget(self.central_widget)
-
+        
+        # 使用绝对定位布局
+        from PyQt6.QtWidgets import QVBoxLayout
         layout = QVBoxLayout(self.central_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-
+        
+        # 创建 Live2D 视图
         self.live2d_view = None
+        logger.info(f"🔍 HAS_LIVE2D = {HAS_LIVE2D}")
         if HAS_LIVE2D:
             try:
+                logger.info("🎨 Creating Live2DView...")
                 self.live2d_view = Live2DView(self.central_widget)
-                # 确保 OpenGL 部件本身不遮挡背景
                 self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-                #self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop)
                 layout.addWidget(self.live2d_view)
-                model_path = "/Users/mylianjie/.openclaw/workspace/live2d-models/hanamaru"
-                self.live2d_view.load_model(model_path)
+                logger.info("✅ Live2DView created and added to layout")
+                
+                # Connect model loaded signal for auto watermark removal
+                self.live2d_view.model_loaded.connect(self._auto_remove_watermark)
+                # 🚨 【触觉反馈】连接触摸信号到窗口级信号
+                self.live2d_view.touched.connect(self._on_touched)
+                
+                # 加载模型 - 使用 get_resource_path 确保打包后路径正确
+                model_path = get_resource_path("src/assets/models/hanamaru")
+                logger.info(f"📂 Loading model from: {model_path}")
+                
+                # 检查路径是否存在
+                import os
+                if os.path.exists(model_path):
+                    logger.info(f"✅ Model path exists: {model_path}")
+                    # 列出目录内容
+                    try:
+                        files = os.listdir(model_path)
+                        logger.info(f"📄 Files in model dir: {files}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Cannot list model dir: {e}")
+                else:
+                    logger.error(f"❌ Model path does NOT exist: {model_path}")
+                
+                success = self.live2d_view.load_model(model_path)
+                logger.info(f"🎯 Model load result: {success}")
+                
             except Exception as e:
-                logger.error(f"Failed to initialize Live2D: {e}")
+                logger.error(f"❌ Failed to initialize Live2D: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        else:
+            logger.error("❌ HAS_LIVE2D is False, skipping Live2D initialization")
 
         self.bubble_widget = BubbleWidget(self)
         self.bubble_widget.hide()
@@ -118,6 +176,15 @@ class SherrySpriteWindow(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         self.tray_icon = QSystemTrayIcon(self)
+        
+        # 设置托盘图标
+        icon_path = get_resource_path("src/assets/icon.ico")
+        if Path(icon_path).exists():
+            self.tray_icon.setIcon(QIcon(icon_path))
+            logger.info(f"[ICON] Tray icon set: {icon_path}")
+        else:
+            logger.warning(f"[ICON] Tray icon not found: {icon_path}")
+        
         tray_menu = QMenu()
         
         show_action = QAction("Show Sherry", self)
@@ -154,49 +221,7 @@ class SherrySpriteWindow(QMainWindow):
     @pyqtSlot(str)
     def set_background(self, bg_type: str):
         """设置窗口背景 - 支持纯色、渐变、透明和本地图片路径"""
-        if bg_type == "purple":
-            # 渐变紫色
-            style = """
-                #centralWidget {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #667eea, stop:1 #764ba2);
-                    border-radius: 20px;
-                }
-            """
-            self.central_widget.setStyleSheet(style)
-            logger.info("🎨 Background set to Purple Gradient")
-            
-        elif bg_type == "transparent":
-            # 透明背景
-            self.central_widget.setStyleSheet("#centralWidget { background: transparent; }")
-            logger.info("🎨 Background set to Transparent")
-            
-        elif bg_type.startswith("image:"):
-            # 图片背景 - 使用 border-image 实现自动缩放填满
-            image_path = bg_type[6:]  # 移除 "image:" 前缀
-            from pathlib import Path
-            abs_path = Path(image_path).expanduser().resolve()
-            
-            # 🚨 【新增】安全检查：确保图片文件真的存在
-            if not abs_path.exists():
-                logger.error(f"❌ 背景图片不存在: {abs_path}")
-                return
-                
-            # 🚨 【修复】QSS 需要本地绝对路径，不支持 file:// 协议，统一替换为正斜杠
-            safe_path = str(abs_path).replace('\\', '/')
-            
-            style = f"""
-                #centralWidget {{
-                    border-image: url("{safe_path}") 0 0 0 0 stretch stretch;
-                    border-radius: 20px;
-                }}
-            """
-            self.central_widget.setStyleSheet(style)
-            logger.info(f"🎨 Background set to image: {safe_path}")
-            
-        else:
-            # 允许直接传递颜色
-            self.central_widget.setStyleSheet(f"#centralWidget {{ background: {bg_type}; border-radius: 20px; }}")
-            logger.info(f"🎨 Background set to custom: {bg_type}")
+        logger.info(f"Background change requested: {bg_type} (not implemented)")
             
     def toggle_big_head_mode(self):
         self.is_big_head = not self.is_big_head
@@ -253,11 +278,30 @@ class SherrySpriteWindow(QMainWindow):
         bh_action.setChecked(self.is_big_head)
         bh_action.triggered.connect(self.toggle_big_head_mode)
         menu.addAction(bh_action)
+        
+        # Eye tracking toggle
+        eye_action = QAction("👁️ 视线跟随 (Eye Tracking)", self)
+        eye_action.setCheckable(True)
+        eye_tracking_enabled = self.live2d_view and getattr(self.live2d_view, '_eye_tracking_enabled', True)
+        eye_action.setChecked(eye_tracking_enabled)
+        eye_action.triggered.connect(self._toggle_eye_tracking)
+        menu.addAction(eye_action)
 
         menu.addSeparator()
 
         # 🎙️ TTS Test Menu
-        tts_menu = menu.addMenu("🎙️ TTS 测试")
+        tts_menu = menu.addMenu("🎙️ TTS 设置")
+
+        # 🚨 TTS Master Switch
+        tts_master_action = QAction("🗣️ 启用语音 (TTS)", self)
+        tts_master_action.setCheckable(True)
+        # Get current TTS state from backend
+        tts_enabled = self._get_tts_state()
+        tts_master_action.setChecked(tts_enabled)
+        tts_master_action.triggered.connect(self._toggle_tts_master)
+        tts_menu.addAction(tts_master_action)
+
+        tts_menu.addSeparator()
 
         # Provider selection submenu
         provider_menu = tts_menu.addMenu("选择引擎")
@@ -285,9 +329,10 @@ class SherrySpriteWindow(QMainWindow):
             ("英文测试", "Hello, this is a test of the TTS system."),
         ]
 
-        for label, text in test_phrases:
+        from functools import partial
+        for label, phrase in test_phrases:
             action = QAction(label, self)
-            action.triggered.connect(lambda checked, t=text: self._test_tts(t))
+            action.triggered.connect(partial(self._test_tts, phrase))
             tts_menu.addAction(action)
 
         # Lip sync toggle
@@ -304,18 +349,6 @@ class SherrySpriteWindow(QMainWindow):
             tts_menu.addAction(lip_sync_action)
 
         menu.addSeparator()
-
-        # 背景菜单
-        bg_menu = menu.addMenu("🎨 背景 (Background)")
-        trans_bg = QAction("透明 (Transparent)", self)
-        trans_bg.triggered.connect(lambda: self.set_background("transparent"))
-        bg_menu.addAction(trans_bg)
-        
-        purple_bg = QAction("渐变紫 (Purple Gradient)", self)
-        purple_bg.triggered.connect(lambda: self.set_background("purple"))
-        bg_menu.addAction(purple_bg)
-
-        menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(QApplication.quit)
         menu.addAction(quit_action)
@@ -326,6 +359,18 @@ class SherrySpriteWindow(QMainWindow):
         self._watermark_enabled = not self._watermark_enabled
         val = -1.0 if self._watermark_enabled else 0.0
         self.set_parameter("Open_EyeMask4", val)
+    
+    def _auto_remove_watermark(self):
+        """启动时自动去水印"""
+        self._watermark_enabled = True
+        self.set_parameter("Open_EyeMask4", -1.0)
+        logger.info("🎭 已自动启用去水印")
+    
+    def _on_touched(self, action: str, part: str):
+        """🚨 【触觉反馈】处理触摸事件，转发到大脑"""
+        logger.info(f"💖 雪莉感受到了主人的{action}，部位: {part}")
+        # 发射信号，由 app.py 转发到 WebSocket
+        self.touch_event.emit(action, part)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -338,11 +383,6 @@ class SherrySpriteWindow(QMainWindow):
         if event.buttons() == Qt.MouseButton.LeftButton and self.drag_position:
             self.move(event.globalPosition().toPoint() - self.drag_position)
             event.accept()
-        
-        # 眼神跟随：即使没有点击，只要鼠标在窗口内移动，就通知 Live2DView
-        if self.live2d_view:
-            # 将事件传递给子控件
-            self.live2d_view.mouseMoveEvent(event)
 
     @pyqtSlot(str)
     def set_expression(self, name: str):
@@ -362,6 +402,15 @@ class SherrySpriteWindow(QMainWindow):
             self.live2d_view.mouse_y = y
             self.live2d_view.update()
             logger.info(f"👀 Look at: ({x}, {y})")
+
+    @pyqtSlot(float)
+    def reset_pose(self, duration_ms: float = 3000.0):
+        """🚨 强制回正头部和身体（用于TTS说话时）
+        duration_ms: 回正保持时间（毫秒）
+        """
+        if self.live2d_view:
+            logger.info(f"🎯 SpriteWindow: 强制回正姿势（{duration_ms}ms）")
+            self.live2d_view.reset_pose(duration_ms)
 
     @pyqtSlot(int, int)
     def set_position(self, x: int, y: int):
@@ -408,15 +457,15 @@ class SherrySpriteWindow(QMainWindow):
 
         # Run TTS in background thread to avoid blocking UI
         import threading
-        def run_tts():
+        def run_tts(tts_text):
             try:
-                result = self.tts_manager.speak_sync(text)
+                result = self.tts_manager.speak_sync(tts_text)
                 if not result.success:
                     logger.error(f"TTS failed: {result.error}")
             except Exception as e:
                 logger.error(f"TTS error: {e}")
 
-        thread = threading.Thread(target=run_tts, daemon=True)
+        thread = threading.Thread(target=run_tts, args=(text,), daemon=True)
         thread.start()
 
     def _toggle_lip_sync(self):
@@ -426,5 +475,99 @@ class SherrySpriteWindow(QMainWindow):
             self.live2d_view.set_lip_sync_enabled(not current)
             new_state = not current
             self.show_message(f"👄 口型同步: {'开启' if new_state else '关闭'}")
+
+    def _get_tts_state(self) -> bool:
+        """Get current TTS state from backend"""
+        try:
+            import urllib.request
+            import urllib.error
+            import json
+            
+            data = json.dumps({"action": "status"}).encode('utf-8')
+            
+            req = urllib.request.Request(
+                "http://127.0.0.1:8766/api/tts",
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            
+            with urllib.request.urlopen(req, timeout=1) as response:
+                if response.status == 200:
+                    result = json.loads(response.read().decode('utf-8'))
+                    return result.get('tts_enabled', True)
+        except Exception as e:
+            logger.debug(f"Failed to get TTS state: {e}")
+        
+        # Default to enabled if backend not available
+        return True
+
+    def _toggle_tts_master(self, checked: bool):
+        """Toggle TTS master switch via HTTP API"""
+        from PyQt6.QtCore import QTimer
+        
+        def send_tts_request():
+            try:
+                import urllib.request
+                import urllib.error
+                import json
+                
+                action = "on" if checked else "off"
+                data = json.dumps({"action": action}).encode('utf-8')
+                
+                req = urllib.request.Request(
+                    "http://127.0.0.1:8766/api/tts",
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                
+                with urllib.request.urlopen(req, timeout=2) as response:
+                    if response.status == 200:
+                        self.show_message(f"🗣️ 语音 (TTS): {'开启' if checked else '关闭'}")
+                    else:
+                        self.show_message(f"⚠️ TTS 状态已切换 (HTTP {response.status})")
+                        
+            except urllib.error.URLError as e:
+                logger.error(f"TTS HTTP request failed: {e}")
+                self.show_message(f"⚠️ TTS 状态已切换 (后端未响应)")
+            except Exception as e:
+                logger.error(f"TTS toggle error: {e}")
+                self.show_message(f"⚠️ TTS 状态已切换")
+        
+        # Use QTimer to avoid blocking UI
+        QTimer.singleShot(0, send_tts_request)
+
+    def _toggle_eye_tracking(self):
+        """Toggle eye tracking"""
+        if self.live2d_view and hasattr(self.live2d_view, 'set_eye_tracking_enabled'):
+            current = getattr(self.live2d_view, '_eye_tracking_enabled', True)
+            self.live2d_view.set_eye_tracking_enabled(not current)
+            new_state = not current
+            self.show_message(f"👁️ 视线跟随: {'开启' if new_state else '关闭'}")
+
+    def closeEvent(self, event):
+        """窗口关闭事件 - 清理资源"""
+        logger.info("👋 窗口关闭，清理资源...")
+        
+        # 清理 Live2D 视图
+        if self.live2d_view:
+            try:
+                self.live2d_view.cleanup()
+                logger.debug("✅ Live2D 视图已清理")
+            except Exception as e:
+                logger.warning(f"清理 Live2D 视图时出错: {e}")
+        
+        # 清理 TTS 管理器
+        if self.tts_manager:
+            try:
+                self.tts_manager.cleanup()
+                logger.debug("✅ TTS 管理器已清理")
+            except Exception as e:
+                logger.warning(f"清理 TTS 管理器时出错: {e}")
+        
+        # 接受关闭事件
+        event.accept()
+        logger.info("👋 窗口已关闭")
 
             

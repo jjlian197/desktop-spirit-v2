@@ -6,11 +6,54 @@ Handles audio playback and lip sync integration
 """
 
 import os
+import sys
+
+# Windows: 全局设置 subprocess 不显示终端窗口
+if sys.platform == 'win32':
+    import subprocess
+    # 创建一个启动信息对象，隐藏终端窗口
+    _startupinfo = subprocess.STARTUPINFO()
+    _startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    _startupinfo.wShowWindow = subprocess.SW_HIDE
+    
+    # 保存原始的 Popen
+    _original_popen = subprocess.Popen
+    
+    # 创建包装函数，自动添加隐藏窗口标志
+    def _hidden_popen(*args, **kwargs):
+        if 'startupinfo' not in kwargs:
+            kwargs['startupinfo'] = _startupinfo
+        if 'creationflags' not in kwargs:
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        return _original_popen(*args, **kwargs)
+    
+    # 替换 Popen
+    subprocess.Popen = _hidden_popen
+    
+    # 同时修改 run 和 call 的默认行为
+    _original_run = subprocess.run
+    def _hidden_run(*args, **kwargs):
+        if 'startupinfo' not in kwargs:
+            kwargs['startupinfo'] = _startupinfo
+        if 'creationflags' not in kwargs:
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        return _original_run(*args, **kwargs)
+    subprocess.run = _hidden_run
+
+# Configure FFmpeg path for pydub on Windows
+if sys.platform == 'win32':
+    ffmpeg_bin = r"C:\ffmpeg\ffmpeg-8.0.1-full_build-shared\bin"
+    if os.path.exists(ffmpeg_bin):
+        os.environ["PATH"] = ffmpeg_bin + os.pathsep + os.environ.get("PATH", "")
+        os.environ["FFMPEG_BINARY"] = os.path.join(ffmpeg_bin, "ffmpeg.exe")
+        os.environ["FFPROBE_BINARY"] = os.path.join(ffmpeg_bin, "ffprobe.exe")
+
 import asyncio
 import tempfile
-import subprocess
+# subprocess 已在文件开头导入并设置全局 hook
 import wave
 import struct
+import random
 import numpy as np
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -79,11 +122,10 @@ class EdgeTTSProvider(BaseTTSProvider):
     def _check_edge_tts(self):
         """Check if edge-tts is installed"""
         try:
-            subprocess.run(["edge-tts", "--version"], 
-                         capture_output=True, check=True)
+            import edge_tts
             self._initialized = True
             logger.info("✅ EdgeTTS provider initialized")
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except ImportError:
             self._initialized = False
             logger.warning("⚠️ edge-tts not found. Install with: pip install edge-tts")
     
@@ -109,30 +151,13 @@ class EdgeTTSProvider(BaseTTSProvider):
             output_path = f.name
         
         try:
-            # Build edge-tts command
-            cmd = [
-                "edge-tts",
-                "--voice", voice,
-                "--text", text,
-                "--write-media", output_path,
-                "--rate", self.rate,
-                "--pitch", self.pitch
-            ]
-            
-            # Run edge-tts
-            logger.info(f"🎙️ EdgeTTS: generating audio for '{text[:30]}...'")
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                raise Exception(f"EdgeTTS failed: {stderr.decode()}")
+            # Use edge_tts Python library directly
+            import edge_tts
+            communicate = edge_tts.Communicate(text, voice=voice, rate=self.rate, pitch=self.pitch)
+            await communicate.save(output_path)
             
             # Get audio duration
-            duration_ms = await self._get_audio_duration(output_path)
+            duration_ms = await self._get_audio_duration(output_path, text)
             
             return TTSResult(
                 audio_path=output_path,
@@ -158,20 +183,23 @@ class EdgeTTSProvider(BaseTTSProvider):
                 error=str(e)
             )
     
-    async def _get_audio_duration(self, audio_path: str) -> float:
+    async def _get_audio_duration(self, audio_path: str, text: str = "") -> float:
         """Get audio duration in milliseconds"""
         try:
-            import subprocess
+            # Windows: hide terminal window (全局 hook 已设置，但显式传递更安全)
+            kwargs = {}
+            if sys.platform == 'win32':
+                kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", 
                  "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
-                capture_output=True, text=True
+                capture_output=True, text=True, **kwargs
             )
             duration_sec = float(result.stdout.strip())
             return duration_sec * 1000
         except:
             # Fallback: estimate based on text length
-            return len(text) * 200  # ~200ms per character
+            return len(text) * 200 if text else 3000  # ~200ms per character
 
 
 class ElevenLabsProvider(BaseTTSProvider):
@@ -337,17 +365,13 @@ class LocalTTSProvider(BaseTTSProvider):
                 )
                 await process.communicate()
                 
-            else:  # Windows or fallback
-                # Use say command directly without file output
-                # Local TTS on Windows doesn't support file output easily
-                cmd = ["say", text]
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await process.communicate()
-                # Return empty path since we played directly
+            else:  # Windows
+                # Use pyttsx3 for Windows TTS
+                import pyttsx3
+                engine = pyttsx3.init()
+                engine.say(text)
+                engine.runAndWait()
+                # Return result without file since pyttsx3 plays directly
                 return TTSResult(
                     audio_path="",
                     text=text,
@@ -392,90 +416,80 @@ class AudioAnalyzer:
         self.frame_rate = frame_rate
         self._executor = ThreadPoolExecutor(max_workers=2)
     
-    def analyze_amplitude(self, audio_path: str) -> List[float]:
+    def analyze_amplitude(self, audio_path: str, duration_ms: float = 3000) -> List[float]:
         """
         Analyze audio file and return amplitude values per frame
         Returns list of normalized amplitude values (0.0 - 1.0)
         """
         try:
-            # Convert to WAV if needed
-            wav_path = self._convert_to_wav(audio_path)
+            # Try fast path: use pydub directly (no WAV conversion needed)
+            from pydub import AudioSegment
             
-            # Read WAV file
-            with wave.open(wav_path, 'rb') as wav_file:
-                n_channels = wav_file.getnchannels()
-                sample_width = wav_file.getsampwidth()
-                frame_rate = wav_file.getframerate()
-                n_frames = wav_file.getnframes()
+            audio = AudioSegment.from_file(audio_path)
+            audio = audio.set_frame_rate(24000).set_channels(1)
+            
+            # Get raw samples
+            samples = np.array(audio.get_array_of_samples())
+            frame_rate = audio.frame_rate
+            
+            # Calculate samples per frame (30fps)
+            samples_per_frame = frame_rate // self.frame_rate
+            n_analysis_frames = len(samples) // samples_per_frame
+            
+            # Calculate amplitude for each frame
+            amplitudes = []
+            for i in range(n_analysis_frames):
+                start = i * samples_per_frame
+                end = start + samples_per_frame
+                frame_samples = samples[start:end]
                 
-                # Read all frames
-                raw_data = wav_file.readframes(n_frames)
-                
-                # Convert to numpy array
-                if sample_width == 2:
-                    fmt = f"{n_frames * n_channels}h"
-                    samples = np.array(struct.unpack(fmt, raw_data))
-                elif sample_width == 1:
-                    samples = np.frombuffer(raw_data, dtype=np.uint8)
-                    samples = (samples.astype(np.float32) - 128) / 128.0
-                else:
-                    logger.warning(f"Unsupported sample width: {sample_width}")
-                    return []
-                
-                # Convert to mono
-                if n_channels == 2:
-                    samples = samples[::2]  # Take left channel
-                
-                # Calculate samples per frame
-                samples_per_frame = frame_rate // self.frame_rate
-                n_analysis_frames = len(samples) // samples_per_frame
-                
-                # Calculate amplitude for each frame
-                amplitudes = []
-                for i in range(n_analysis_frames):
-                    start = i * samples_per_frame
-                    end = start + samples_per_frame
-                    frame_samples = samples[start:end]
-                    
-                    # RMS amplitude
-                    rms = np.sqrt(np.mean(frame_samples.astype(np.float64) ** 2))
-                    # Normalize (16-bit audio max value is 32768)
-                    normalized = min(rms / 32768.0 * 8, 1.0)  # Scale up for better sensitivity
-                    amplitudes.append(normalized)
-                
-                # Clean up temp WAV if converted
-                if wav_path != audio_path and os.path.exists(wav_path):
-                    try:
-                        os.unlink(wav_path)
-                    except:
-                        pass
-                
-                return amplitudes
+                # RMS amplitude
+                rms = np.sqrt(np.mean(frame_samples.astype(np.float64) ** 2))
+                # Normalize (16-bit audio max value is 32768)
+                normalized = min(rms / 32768.0 * 8, 1.0)
+                amplitudes.append(normalized)
+            
+            logger.info(f"✅ Audio analyzed: {len(amplitudes)} frames")
+            return amplitudes
                 
         except Exception as e:
-            logger.error(f"❌ Audio analysis error: {e}")
-            return []
+            logger.warning(f"Audio analysis failed: {e}, using simulated data")
+            return self._generate_simulated_lipsync(duration_ms)
+    
+    def _generate_simulated_lipsync(self, duration_ms: float) -> List[float]:
+        """Generate simulated lip sync data when audio analysis fails"""
+        import random
+        n_frames = int(duration_ms / 1000 * self.frame_rate)
+        amplitudes = []
+        for i in range(n_frames):
+            # Generate a sine wave pattern with some randomness
+            t = i / n_frames
+            base = 0.3 + 0.4 * (1 + np.sin(t * 10 * np.pi)) / 2
+            noise = random.uniform(0, 0.2)
+            amplitudes.append(min(base + noise, 1.0))
+        return amplitudes
     
     def _convert_to_wav(self, audio_path: str) -> str:
         """Convert audio file to WAV format if needed"""
         if audio_path.endswith('.wav'):
             return audio_path
         
-        # Convert using ffmpeg
+        # Try using pydub with explicit ffmpeg path
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             wav_path = f.name
         
         try:
-            subprocess.run([
-                "ffmpeg", "-y", "-i", audio_path,
-                "-acodec", "pcm_s16le", "-ar", "24000", "-ac", "1",
-                wav_path
-            ], capture_output=True, check=True)
+            from pydub import AudioSegment
+            
+            audio = AudioSegment.from_file(audio_path)
+            audio = audio.set_frame_rate(24000).set_channels(1)
+            audio.export(wav_path, format="wav")
+            logger.info("✅ Audio converted successfully with FFmpeg")
             return wav_path
         except Exception as e:
-            logger.error(f"FFmpeg conversion failed: {e}")
-            # Return original path and hope for the best
-            return audio_path
+            logger.warning(f"Audio conversion failed: {e}")
+            # Return empty to indicate conversion failed
+            return ""
 
 
 class TTSManager(QObject):
@@ -591,7 +605,7 @@ class TTSManager(QObject):
                 
                 # Analyze audio for lip sync
                 logger.info("🔊 Analyzing audio for lip sync...")
-                self._amplitude_data = self.audio_analyzer.analyze_amplitude(result.audio_path)
+                self._amplitude_data = self.audio_analyzer.analyze_amplitude(result.audio_path, result.duration_ms)
                 self.audio_amplitude.emit(self._amplitude_data)
             
             # Play audio
@@ -614,7 +628,7 @@ class TTSManager(QObject):
             )
     
     async def _play_audio(self, audio_path: str):
-        """Play audio file with lip sync"""
+        """Play audio file with lip sync - no terminal windows"""
         if not audio_path or not os.path.exists(audio_path):
             logger.warning("No audio file to play")
             self._is_speaking = False
@@ -628,22 +642,43 @@ class TTSManager(QObject):
             from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
             QMetaObject.invokeMethod(self._playback_timer, "start", Qt.ConnectionType.QueuedConnection, Q_ARG(int, 33))
         
-        # Play audio using system player
+        # Play audio using system player (no terminal windows)
         try:
-            if is_apple_silicon() or os.uname().sysname == 'Darwin':
+            import platform as pf
+            if pf.system() == 'Darwin':
                 # macOS: use afplay
                 process = await asyncio.create_subprocess_exec(
                     "afplay", audio_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
                 )
                 await process.communicate()
+            elif pf.system() == 'Windows':
+                # Windows: use pygame (no console window)
+                try:
+                    import pygame
+                    if not pygame.mixer.get_init():
+                        pygame.mixer.init(frequency=24000)
+                    pygame.mixer.music.load(audio_path)
+                    pygame.mixer.music.play()
+                    while pygame.mixer.music.get_busy():
+                        await asyncio.sleep(0.05)
+                except Exception as e:
+                    logger.warning(f"Pygame playback failed: {e}, trying fallback")
+                    # Fallback: use PowerShell MediaPlayer (hidden window)
+                    process = await asyncio.create_subprocess_exec(
+                        "powershell", "-c", f"(New-Object Media.SoundPlayer '{audio_path}').PlaySync()",
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    await process.communicate()
             else:
-                # Linux/Windows: use ffplay or similar
+                # Linux: use ffplay or similar
                 process = await asyncio.create_subprocess_exec(
                     "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", audio_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
                 )
                 await process.communicate()
                 
