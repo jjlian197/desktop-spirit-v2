@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Sherry Desktop Sprite - Main Application
-ğŸ±ğŸ’œ A cute desktop pet powered by Live2D and PyQt6
+???? A cute desktop pet powered by Live2D and PyQt6
 """
 
 import sys
@@ -11,7 +11,7 @@ import signal
 from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtCore import Qt
 from loguru import logger
 
 from src.core.sprite_window import SherrySpriteWindow
@@ -19,25 +19,28 @@ from src.core.websocket_server import WebSocketServer
 from src.utils.logger import setup_logging
 from src.core.lip_sync_websocket import LipSyncWebSocketBroadcaster
 from src.brain.sprite_brain import SpriteBrain
+from PyQt6.QtCore import QThread
 
 
 class BrainThread(QThread):
-    """åœ¨ç‹¬ç«‹çº¿ç¨‹ä¸­è¿è¡Œå¤§è„‘"""
+    """ÔÚ¶ÀÁ¢Ïß³ÌÖĞÔËĞĞ´óÄÔ"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.brain = None
         
     def run(self):
-        """çº¿ç¨‹å…¥å£"""
+        """Ïß³ÌÈë¿Ú"""
+        import asyncio
         self.brain = SpriteBrain()
         try:
             asyncio.run(self.brain.start())
         except Exception as e:
+            from loguru import logger
             logger.error(f"Brain error: {e}")
     
     def stop(self):
-        """åœæ­¢å¤§è„‘"""
+        """Í£Ö¹´óÄÔ"""
         if self.brain:
             self.brain.stop()
 
@@ -55,18 +58,42 @@ class SherryApplication(QApplication):
     """Main Application with exception handling"""
     
     def __init__(self, argv):
+        # Enable high DPI scaling BEFORE calling super().__init__
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+        
         super().__init__(argv)
+        
+        # ÉèÖÃÓ¦ÓÃ³ÌĞòÍ¼±ê£¨Windows ÈÎÎñÀ¸ĞèÒª£©
+        self._setup_icon()
         
         # Global exception handler
         sys.excepthook = self.handle_exception
         
-        # Enable high DPI scaling
-        self.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-        )
-        
         # Create required directories
         self._ensure_directories()
+    
+    def _setup_icon(self):
+        """ÉèÖÃÓ¦ÓÃ³ÌĞòÍ¼±ê"""
+        try:
+            from PyQt6.QtGui import QIcon
+            from pathlib import Path
+            import sys
+            
+            # »ñÈ¡Í¼±êÂ·¾¶
+            if hasattr(sys, '_MEIPASS'):
+                icon_path = Path(sys._MEIPASS) / "src" / "assets" / "icon.ico"
+            else:
+                icon_path = Path(__file__).parent / "assets" / "icon.ico"
+            
+            if icon_path.exists():
+                self.setWindowIcon(QIcon(str(icon_path)))
+                logger.info(f"[ICON] Application icon set: {icon_path}")
+            else:
+                logger.warning(f"[ICON] Icon not found: {icon_path}")
+        except Exception as e:
+            logger.warning(f"[ICON] Failed to set icon: {e}")
     
     def _ensure_directories(self):
         """Create required directories"""
@@ -89,7 +116,7 @@ def main():
     # Setup logging
     setup_logging()
     
-    logger.info("ğŸ±ğŸ’œ Starting Sherry Desktop Sprite...")
+    logger.info("???? Starting Sherry Desktop Sprite...")
     
     # Create Qt Application
     app = SherryApplication(sys.argv)
@@ -105,11 +132,12 @@ def main():
     ws_server = WebSocketServer(window)
     ws_server.start()
     
-    # ğŸš¨ ã€è§¦è§‰åé¦ˆã€‘è¿æ¥è§¦æ‘¸äº‹ä»¶åˆ° WebSocket å¹¿æ’­
+    # ?? ¡¾´¥¾õ·´À¡¡¿Á¬½Ó´¥ÃşÊÂ¼şµ½ WebSocket ¹ã²¥
     def on_touch_event(action, part):
-        """å½“é›ªè‰è¢«è§¦æ‘¸æ—¶ï¼Œå¹¿æ’­åˆ°å¤§è„‘ï¼ˆçº¿ç¨‹å®‰å…¨ï¼‰"""
-        logger.info(f"ğŸ”„ è½¬å‘è§¦æ‘¸äº‹ä»¶: {action} on {part}")
-        # ä½¿ç”¨çº¿ç¨‹å®‰å…¨çš„å¹¿æ’­æ–¹æ³•
+        """µ±Ñ©Àò±»´¥ÃşÊ±£¬¹ã²¥µ½´óÄÔ£¨Ïß³Ì°²È«£©"""
+        from loguru import logger
+        logger.info(f"?? ×ª·¢´¥ÃşÊÂ¼ş: {action} on {part}")
+        # Ê¹ÓÃÏß³Ì°²È«µÄ¹ã²¥·½·¨
         ws_server.broadcast_sync("touch_event", {
             "action": action,
             "part": part
@@ -117,13 +145,13 @@ def main():
     
     window.touch_event.connect(on_touch_event)
     
-    logger.info("âœ… Sherry Desktop Sprite started successfully!")
+    logger.info("? Sherry Desktop Sprite started successfully!")
     logger.info("   WebSocket: ws://127.0.0.1:8765/sprite")
     
-    # Start Brain thread (ç²¾çµå¤§è„‘)
+    # Start Brain thread (¾«Áé´óÄÔ)
     brain_thread = BrainThread()
     brain_thread.start()
-    logger.info("ğŸ§  å¤§è„‘å·²å¯åŠ¨ (é¼ æ ‡è·Ÿéšæ¿€æ´»)")
+    logger.info("?? ´óÄÔÒÑÆô¶¯ (Êó±ê¸úËæ¼¤»î)")
     
     # Run Qt event loop
     exit_code = app.exec()
@@ -131,8 +159,8 @@ def main():
     # Cleanup
     ws_server.stop()
     brain_thread.stop()
-    brain_thread.wait(2000)  # ç­‰å¾…2ç§’è®©å¤§è„‘ä¼˜é›…é€€å‡º
-    logger.info("ğŸ‘‹ Sherry Desktop Sprite stopped.")
+    brain_thread.wait(2000)  # µÈ´ı2ÃëÈÃ´óÄÔÓÅÑÅÍË³ö
+    logger.info("?? Sherry Desktop Sprite stopped.")
     
     return exit_code
 

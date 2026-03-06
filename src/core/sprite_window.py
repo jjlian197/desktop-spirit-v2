@@ -4,7 +4,6 @@ Sherry Sprite Window - Transparent, Frameless, Always-on-Top
 """
 
 import sys
-import os
 import platform
 from pathlib import Path
 
@@ -13,16 +12,25 @@ from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu
 )
 from PyQt6.QtCore import Qt, QPoint, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QIcon, QAction, QFont, QPalette, QColor, QGradient, QLinearGradient ,QSurfaceFormat
+from PyQt6.QtGui import QIcon, QAction, QFont
 from loguru import logger
 
 from src.ui.bubble_widget import BubbleWidget
 try:
-    from src.core.live2d_view import Live2DView, HAS_LIVE2D, get_project_dir
+    from src.core.live2d_view import Live2DView, HAS_LIVE2D
 except ImportError:
     HAS_LIVE2D = False
-    def get_project_dir():
-        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import resource path utility
+try:
+    from src.utils import get_resource_path
+except ImportError:
+    # Fallback if utils not available
+    def get_resource_path(relative_path: str) -> str:
+        """¼òµ¥µÄÂ·¾¶´¦Àí£¬½öÊÊÓÃÓÚ¿ª·¢»·¾³"""
+        if hasattr(sys, '_MEIPASS'):
+            return str(Path(sys._MEIPASS) / relative_path)
+        return relative_path
 
 # Import TTS Manager
 try:
@@ -41,6 +49,7 @@ if platform.system() == 'Darwin':
     except ImportError:
         pass
 
+
 class SherrySpriteWindow(QMainWindow):
     """Main window for Sherry Desktop Sprite"""
 
@@ -49,8 +58,8 @@ class SherrySpriteWindow(QMainWindow):
     motion_triggered = pyqtSignal(str, int)
     message_received = pyqtSignal(str, int)
     
-    # ğŸš¨ ã€è§¦è§‰åé¦ˆã€‘è§¦æ‘¸äº‹ä»¶ä¿¡å· - å½“ç”¨æˆ·è§¦æ‘¸é›ªè‰æ—¶å‘å°„
-    touch_event = pyqtSignal(str, str)  # (action, part) ä¾‹å¦‚ ("tap", "head")
+    # ?? ¡¾´¥¾õ·´À¡¡¿´¥ÃşÊÂ¼şĞÅºÅ - µ±ÓÃ»§´¥ÃşÑ©ÀòÊ±·¢Éä
+    touch_event = pyqtSignal(str, str)  # (action, part) ÀıÈç ("tap", "head")
 
     def __init__(self):
         super().__init__()
@@ -66,7 +75,7 @@ class SherrySpriteWindow(QMainWindow):
         if HAS_TTS:
             try:
                 self.tts_manager = get_tts_manager()
-                logger.info("âœ… SpriteWindow: TTS manager initialized")
+                logger.info("? SpriteWindow: TTS manager initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize TTS manager: {e}")
 
@@ -75,11 +84,16 @@ class SherrySpriteWindow(QMainWindow):
         self._setup_ui()
         self._setup_tray()
         self._position_bottom_right()
-
+        
+        # ÏÔÊ¾´°¿Ú²¢¼ÇÂ¼Î»ÖÃ
+        self.show()
+        logger.info(f"[WINDOW] Position: ({self.x()}, {self.y()}), Size: ({self.width()}, {self.height()})")
+        logger.info(f"[WINDOW] Visible: {self.isVisible()}, WindowState: {self.windowState()}")
+        
         logger.info("Sprite window initialized")
 
     def _setup_window(self):
-        # ä½¿ç”¨æ ‡å‡†ç½®é¡¶ä¸”ä¸å¤ºå–ç„¦ç‚¹çš„æ ‡å¿—
+        # Ê¹ÓÃ±ê×¼ÖÃ¶¥ÇÒ²»¶áÈ¡½¹µãµÄ±êÖ¾
         self.setWindowFlags(
             Qt.WindowType.Window |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -87,46 +101,72 @@ class SherrySpriteWindow(QMainWindow):
             Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        
         self.setFixedSize(400, 600)
+        
+        # ÉèÖÃ´°¿ÚÍ¼±ê£¨ÈÎÎñÀ¸ÏÔÊ¾£©
+        icon_path = get_resource_path("src/assets/icon.ico")
+        if Path(icon_path).exists():
+            self.setWindowIcon(QIcon(icon_path))
+            logger.info(f"[ICON] Window icon set: {icon_path}")
+        else:
+            logger.warning(f"[ICON] Window icon not found: {icon_path}")
        
         self.setStyleSheet("SherrySpriteWindow { background: transparent; }")
         
     def _setup_ui(self):
+        # ´´½¨Ö÷ÈİÆ÷
         self.central_widget = QWidget()
-        self.central_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.central_widget.setObjectName("centralWidget")
-        self.central_widget.setStyleSheet("#centralWidget { background: transparent; }")
         self.setCentralWidget(self.central_widget)
-
+        
+        # Ê¹ÓÃ¾ø¶Ô¶¨Î»²¼¾Ö
+        from PyQt6.QtWidgets import QVBoxLayout
         layout = QVBoxLayout(self.central_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-
+        
+        # ´´½¨ Live2D ÊÓÍ¼
         self.live2d_view = None
+        logger.info(f"?? HAS_LIVE2D = {HAS_LIVE2D}")
         if HAS_LIVE2D:
             try:
+                logger.info("?? Creating Live2DView...")
                 self.live2d_view = Live2DView(self.central_widget)
-                # ç¡®ä¿ OpenGL éƒ¨ä»¶æœ¬èº«ä¸é®æŒ¡èƒŒæ™¯
                 self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-                self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop)
                 layout.addWidget(self.live2d_view)
+                logger.info("? Live2DView created and added to layout")
+                
                 # Connect model loaded signal for auto watermark removal
                 self.live2d_view.model_loaded.connect(self._auto_remove_watermark)
-                # ğŸš¨ ã€è§¦è§‰åé¦ˆã€‘è¿æ¥è§¦æ‘¸ä¿¡å·åˆ°çª—å£çº§ä¿¡å·
+                # ?? ¡¾´¥¾õ·´À¡¡¿Á¬½Ó´¥ÃşĞÅºÅµ½´°¿Ú¼¶ĞÅºÅ
                 self.live2d_view.touched.connect(self._on_touched)
-                # ğŸ’œ ä½¿ç”¨ç»å¯¹è·¯å¾„åŠ è½½æ¨¡å‹ï¼ˆæ”¯æŒ .app åŒ…ï¼‰
-                project_dir = get_project_dir()
-                model_path = os.path.join(project_dir, "src", "assets", "models", "hanamaru")
-                logger.info(f"ğŸ“¦ Loading model from: {model_path}")
                 
-                # ğŸ’œ å¼ºåˆ¶åˆ›å»º OpenGL ä¸Šä¸‹æ–‡
-                self.live2d_view.show()
-                self.live2d_view.update()
+                # ¼ÓÔØÄ£ĞÍ - Ê¹ÓÃ get_resource_path È·±£´ò°üºóÂ·¾¶ÕıÈ·
+                model_path = get_resource_path("src/assets/models/hanamaru")
+                logger.info(f"?? Loading model from: {model_path}")
                 
-                self.live2d_view.load_model(model_path)
+                # ¼ì²éÂ·¾¶ÊÇ·ñ´æÔÚ
+                import os
+                if os.path.exists(model_path):
+                    logger.info(f"? Model path exists: {model_path}")
+                    # ÁĞ³öÄ¿Â¼ÄÚÈİ
+                    try:
+                        files = os.listdir(model_path)
+                        logger.info(f"?? Files in model dir: {files}")
+                    except Exception as e:
+                        logger.warning(f"?? Cannot list model dir: {e}")
+                else:
+                    logger.error(f"? Model path does NOT exist: {model_path}")
+                
+                success = self.live2d_view.load_model(model_path)
+                logger.info(f"?? Model load result: {success}")
+                
             except Exception as e:
-                logger.error(f"Failed to initialize Live2D: {e}")
+                logger.error(f"? Failed to initialize Live2D: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        else:
+            logger.error("? HAS_LIVE2D is False, skipping Live2D initialization")
 
         self.bubble_widget = BubbleWidget(self)
         self.bubble_widget.hide()
@@ -137,15 +177,13 @@ class SherrySpriteWindow(QMainWindow):
             return
         self.tray_icon = QSystemTrayIcon(self)
         
-        # ğŸ’œ è®¾ç½®æ‰˜ç›˜å›¾æ ‡
-        icon_paths = [
-            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "sherry.icns"),
-            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "sherry.png"),
-        ]
-        for icon_path in icon_paths:
-            if os.path.exists(icon_path):
-                self.tray_icon.setIcon(QIcon(icon_path))
-                break
+        # ÉèÖÃÍĞÅÌÍ¼±ê
+        icon_path = get_resource_path("src/assets/icon.ico")
+        if Path(icon_path).exists():
+            self.tray_icon.setIcon(QIcon(icon_path))
+            logger.info(f"[ICON] Tray icon set: {icon_path}")
+        else:
+            logger.warning(f"[ICON] Tray icon not found: {icon_path}")
         
         tray_menu = QMenu()
         
@@ -165,63 +203,25 @@ class SherrySpriteWindow(QMainWindow):
     def set_click_through(self, enabled: bool):
         self.is_click_through = enabled
         
-        # 1. æ§ä»¶å±‚çº§ç©¿é€ï¼šé€šçŸ¥ Qt å†…éƒ¨çš„æ‰€æœ‰ç”»æ¿ä¸è¦æ‹¦æˆªé¼ æ ‡
+        # 1. ¿Ø¼ş²ã¼¶´©Í¸£ºÍ¨Öª Qt ÄÚ²¿µÄËùÓĞ»­°å²»ÒªÀ¹½ØÊó±ê
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         if self.central_widget:
             self.central_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         if self.live2d_view:
             self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
             
-        # 2. ğŸš¨ çª—å£å±‚çº§ç©¿é€ï¼šä½¿ç”¨ Qt åŸç”Ÿç³»ç»Ÿæ ‡å¿—ï¼Œå®ƒä¼šè‡ªåŠ¨è°ƒç”¨ macOS åº•å±‚çš„å¿½ç•¥é¼ æ ‡ API
+        # 2. ?? ´°¿Ú²ã¼¶´©Í¸£ºÊ¹ÓÃ Qt Ô­ÉúÏµÍ³±êÖ¾£¬Ëü»á×Ô¶¯µ÷ÓÃ macOS µ×²ãµÄºöÂÔÊó±ê API
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
         
-        # 3. ğŸš¨ æå…¶å…³é”®ï¼šåœ¨è¿è¡Œæ—¶ä¿®æ”¹ WindowFlag ä¼šå¯¼è‡´åº•å±‚åŸç”Ÿçª—å£è¢«é‡ç½®ï¼Œå¿…é¡»è°ƒç”¨ show() å°†çŠ¶æ€æ¨é€åˆ°ç³»ç»Ÿï¼
+        # 3. ?? ¼«Æä¹Ø¼ü£ºÔÚÔËĞĞÊ±ĞŞ¸Ä WindowFlag »áµ¼ÖÂµ×²ãÔ­Éú´°¿Ú±»ÖØÖÃ£¬±ØĞëµ÷ÓÃ show() ½«×´Ì¬ÍÆËÍµ½ÏµÍ³£¡
         self.show()
         
-        logger.info(f"ğŸ–±ï¸ Click-through {'enabled' if enabled else 'disabled'}")
+        logger.info(f"??? Click-through {'enabled' if enabled else 'disabled'}")
         
     @pyqtSlot(str)
     def set_background(self, bg_type: str):
-        """è®¾ç½®çª—å£èƒŒæ™¯ - æ”¯æŒçº¯è‰²ã€æ¸å˜ã€é€æ˜å’Œæœ¬åœ°å›¾ç‰‡è·¯å¾„"""
-        if bg_type == "purple":
-            # æ¸å˜ç´«è‰² - ä½¿ç”¨æ ·å¼è¡¨
-            self.central_widget.setStyleSheet("""
-                #centralWidget {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #667eea, stop:1 #764ba2);
-                    border-radius: 20px;
-                }
-            """)
-            logger.info("ğŸ¨ Background set to Purple Gradient")
-            
-        elif bg_type == "transparent":
-            # é€æ˜èƒŒæ™¯
-            self.central_widget.setStyleSheet("#centralWidget { background: transparent; }")
-            logger.info("ğŸ¨ Background set to Transparent")
-            
-        elif bg_type.startswith("image:"):
-            # å›¾ç‰‡èƒŒæ™¯
-            image_path = bg_type[6:]
-            from pathlib import Path
-            abs_path = Path(image_path).expanduser().resolve()
-            
-            if not abs_path.exists():
-                logger.error(f"âŒ èƒŒæ™¯å›¾ç‰‡ä¸å­˜åœ¨: {abs_path}")
-                return
-                
-            safe_path = str(abs_path).replace('\\', '/')
-            style = f"""
-                #centralWidget {{
-                    border-image: url("{safe_path}") 0 0 0 0 stretch stretch;
-                    border-radius: 20px;
-                }}
-            """
-            self.central_widget.setStyleSheet(style)
-            logger.info(f"ğŸ¨ Background set to image: {safe_path}")
-            
-        else:
-            # çº¯è‰²èƒŒæ™¯
-            self.central_widget.setStyleSheet(f"#centralWidget {{ background: {bg_type}; border-radius: 20px; }}")
-            logger.info(f"ğŸ¨ Background set to custom: {bg_type}")
+        """ÉèÖÃ´°¿Ú±³¾° - Ö§³Ö´¿É«¡¢½¥±ä¡¢Í¸Ã÷ºÍ±¾µØÍ¼Æ¬Â·¾¶"""
+        logger.info(f"Background change requested: {bg_type} (not implemented)")
             
     def toggle_big_head_mode(self):
         self.is_big_head = not self.is_big_head
@@ -246,7 +246,7 @@ class SherrySpriteWindow(QMainWindow):
         expr_menu = menu.addMenu("Expression")
         expressions = [
             ("Normal", "normal"),
-            ("Happy", "star_eye"),
+            ("Happy", "happy"),
             ("Sad", "sad"),
             ("Angry", "angry"),
             ("Love", "love"),
@@ -261,31 +261,39 @@ class SherrySpriteWindow(QMainWindow):
         menu.addSeparator()
         
         # Watermark toggle
-        watermark_action = QAction("å»æ°´å° (Toggle Watermark)", self)
+        watermark_action = QAction("È¥Ë®Ó¡ (Toggle Watermark)", self)
         watermark_action.triggered.connect(self._toggle_watermark)
         menu.addAction(watermark_action)
 
         # Click-through toggle
-        ct_action = QAction("ğŸ–±ï¸ é¼ æ ‡ç©¿é€ (Click Through)", self)
+        ct_action = QAction("??? Êó±ê´©Í¸ (Click Through)", self)
         ct_action.setCheckable(True)
         ct_action.setChecked(self.is_click_through)
         ct_action.triggered.connect(self.set_click_through)
         menu.addAction(ct_action)
 
         # Big head mode toggle
-        bh_action = QAction("ğŸ‘¤ å¤§å¤´æ¨¡å¼ (Big Head Mode)", self)
+        bh_action = QAction("?? ´óÍ·Ä£Ê½ (Big Head Mode)", self)
         bh_action.setCheckable(True)
         bh_action.setChecked(self.is_big_head)
         bh_action.triggered.connect(self.toggle_big_head_mode)
         menu.addAction(bh_action)
+        
+        # Eye tracking toggle
+        eye_action = QAction("??? ÊÓÏß¸úËæ (Eye Tracking)", self)
+        eye_action.setCheckable(True)
+        eye_tracking_enabled = self.live2d_view and getattr(self.live2d_view, '_eye_tracking_enabled', True)
+        eye_action.setChecked(eye_tracking_enabled)
+        eye_action.triggered.connect(self._toggle_eye_tracking)
+        menu.addAction(eye_action)
 
         menu.addSeparator()
 
-        # ğŸ™ï¸ TTS Test Menu
-        tts_menu = menu.addMenu("ğŸ™ï¸ TTS è®¾ç½®")
+        # ??? TTS Test Menu
+        tts_menu = menu.addMenu("??? TTS ÉèÖÃ")
 
-        # ğŸš¨ TTS Master Switch
-        tts_master_action = QAction("ğŸ—£ï¸ å¯ç”¨è¯­éŸ³ (TTS)", self)
+        # ?? TTS Master Switch
+        tts_master_action = QAction("??? ÆôÓÃÓïÒô (TTS)", self)
         tts_master_action.setCheckable(True)
         # Get current TTS state from backend
         tts_enabled = self._get_tts_state()
@@ -296,7 +304,7 @@ class SherrySpriteWindow(QMainWindow):
         tts_menu.addSeparator()
 
         # Provider selection submenu
-        provider_menu = tts_menu.addMenu("é€‰æ‹©å¼•æ“")
+        provider_menu = tts_menu.addMenu("Ñ¡ÔñÒıÇæ")
         if HAS_TTS and self.tts_manager:
             available = self.tts_manager.get_available_providers()
             for provider_name in available:
@@ -307,7 +315,7 @@ class SherrySpriteWindow(QMainWindow):
                 action.triggered.connect(lambda checked, p=provider_name: self._switch_tts_provider(p))
                 provider_menu.addAction(action)
         else:
-            no_tts_action = QAction("TTS ä¸å¯ç”¨", self)
+            no_tts_action = QAction("TTS ²»¿ÉÓÃ", self)
             no_tts_action.setEnabled(False)
             provider_menu.addAction(no_tts_action)
 
@@ -315,21 +323,22 @@ class SherrySpriteWindow(QMainWindow):
 
         # Test phrases
         test_phrases = [
-            ("ä½ å¥½ï¼Œä¸–ç•Œï¼", "ä½ å¥½ï¼Œä¸–ç•Œï¼æˆ‘æ˜¯é›ªè‰~"),
-            ("æµ‹è¯•è¯­éŸ³", "è¿™æ˜¯ä¸€ä¸ªè¯­éŸ³æµ‹è¯•ï¼Œä½ èƒ½å¬åˆ°æˆ‘è¯´è¯å—ï¼Ÿ"),
-            ("é•¿å¥æµ‹è¯•", "ä»Šå¤©å¤©æ°”çœŸä¸é”™ï¼Œé€‚åˆå‡ºå»æ•£æ­¥å’Œå–å’–å•¡å‘¢ï¼"),
-            ("è‹±æ–‡æµ‹è¯•", "Hello, this is a test of the TTS system."),
+            ("ÄãºÃ£¬ÊÀ½ç£¡", "ÄãºÃ£¬ÊÀ½ç£¡ÎÒÊÇÑ©Àò~"),
+            ("²âÊÔÓïÒô", "ÕâÊÇÒ»¸öÓïÒô²âÊÔ£¬ÄãÄÜÌıµ½ÎÒËµ»°Âğ£¿"),
+            ("³¤¾ä²âÊÔ", "½ñÌìÌìÆøÕæ²»´í£¬ÊÊºÏ³öÈ¥É¢²½ºÍºÈ¿§·ÈÄØ£¡"),
+            ("Ó¢ÎÄ²âÊÔ", "Hello, this is a test of the TTS system."),
         ]
 
-        for label, text in test_phrases:
+        from functools import partial
+        for label, phrase in test_phrases:
             action = QAction(label, self)
-            action.triggered.connect(lambda checked, t=text: self._test_tts(t))
+            action.triggered.connect(partial(self._test_tts, phrase))
             tts_menu.addAction(action)
 
         # Lip sync toggle
         if HAS_TTS and self.tts_manager:
             tts_menu.addSeparator()
-            lip_sync_action = QAction("ğŸ‘„ å£å‹åŒæ­¥", self)
+            lip_sync_action = QAction("?? ¿ÚĞÍÍ¬²½", self)
             lip_sync_action.setCheckable(True)
             # Check if live2d_view has lip sync enabled
             lip_sync_enabled = True
@@ -338,18 +347,6 @@ class SherrySpriteWindow(QMainWindow):
             lip_sync_action.setChecked(lip_sync_enabled)
             lip_sync_action.triggered.connect(self._toggle_lip_sync)
             tts_menu.addAction(lip_sync_action)
-
-        menu.addSeparator()
-
-        # èƒŒæ™¯èœå•
-        bg_menu = menu.addMenu("ğŸ¨ èƒŒæ™¯ (Background)")
-        trans_bg = QAction("é€æ˜ (Transparent)", self)
-        trans_bg.triggered.connect(lambda: self.set_background("transparent"))
-        bg_menu.addAction(trans_bg)
-        
-        purple_bg = QAction("æ¸å˜ç´« (Purple Gradient)", self)
-        purple_bg.triggered.connect(lambda: self.set_background("purple"))
-        bg_menu.addAction(purple_bg)
 
         menu.addSeparator()
         quit_action = QAction("Quit", self)
@@ -364,15 +361,15 @@ class SherrySpriteWindow(QMainWindow):
         self.set_parameter("Open_EyeMask4", val)
     
     def _auto_remove_watermark(self):
-        """å¯åŠ¨æ—¶è‡ªåŠ¨å»æ°´å°"""
+        """Æô¶¯Ê±×Ô¶¯È¥Ë®Ó¡"""
         self._watermark_enabled = True
         self.set_parameter("Open_EyeMask4", -1.0)
-        logger.info("ğŸ­ å·²è‡ªåŠ¨å¯ç”¨å»æ°´å°")
+        logger.info("?? ÒÑ×Ô¶¯ÆôÓÃÈ¥Ë®Ó¡")
     
     def _on_touched(self, action: str, part: str):
-        """ğŸš¨ ã€è§¦è§‰åé¦ˆã€‘å¤„ç†è§¦æ‘¸äº‹ä»¶ï¼Œè½¬å‘åˆ°å¤§è„‘"""
-        logger.info(f"ğŸ’– é›ªè‰æ„Ÿå—åˆ°äº†ä¸»äººçš„{action}ï¼Œéƒ¨ä½: {part}")
-        # å‘å°„ä¿¡å·ï¼Œç”± app.py è½¬å‘åˆ° WebSocket
+        """?? ¡¾´¥¾õ·´À¡¡¿´¦Àí´¥ÃşÊÂ¼ş£¬×ª·¢µ½´óÄÔ"""
+        logger.info(f"?? Ñ©Àò¸ĞÊÜµ½ÁËÖ÷ÈËµÄ{action}£¬²¿Î»: {part}")
+        # ·¢ÉäĞÅºÅ£¬ÓÉ app.py ×ª·¢µ½ WebSocket
         self.touch_event.emit(action, part)
 
     def mousePressEvent(self, event):
@@ -386,11 +383,6 @@ class SherrySpriteWindow(QMainWindow):
         if event.buttons() == Qt.MouseButton.LeftButton and self.drag_position:
             self.move(event.globalPosition().toPoint() - self.drag_position)
             event.accept()
-        
-        # çœ¼ç¥è·Ÿéšï¼šå³ä½¿æ²¡æœ‰ç‚¹å‡»ï¼Œåªè¦é¼ æ ‡åœ¨çª—å£å†…ç§»åŠ¨ï¼Œå°±é€šçŸ¥ Live2DView
-        if self.live2d_view:
-            # å°†äº‹ä»¶ä¼ é€’ç»™å­æ§ä»¶
-            self.live2d_view.mouseMoveEvent(event)
 
     @pyqtSlot(str)
     def set_expression(self, name: str):
@@ -404,32 +396,41 @@ class SherrySpriteWindow(QMainWindow):
 
     @pyqtSlot(float, float)
     def look_at(self, x: float, y: float):
-        """è®¾ç½®çœ¼ç¥çœ‹å‘æŒ‡å®šä½ç½® (x, y èŒƒå›´ -1.0 åˆ° 1.0)"""
+        """ÉèÖÃÑÛÉñ¿´ÏòÖ¸¶¨Î»ÖÃ (x, y ·¶Î§ -1.0 µ½ 1.0)"""
         if self.live2d_view:
             self.live2d_view.mouse_x = x
             self.live2d_view.mouse_y = y
             self.live2d_view.update()
-            logger.info(f"ğŸ‘€ Look at: ({x}, {y})")
+            logger.info(f"?? Look at: ({x}, {y})")
+
+    @pyqtSlot(float)
+    def reset_pose(self, duration_ms: float = 3000.0):
+        """?? Ç¿ÖÆ»ØÕıÍ·²¿ºÍÉíÌå£¨ÓÃÓÚTTSËµ»°Ê±£©
+        duration_ms: »ØÕı±£³ÖÊ±¼ä£¨ºÁÃë£©
+        """
+        if self.live2d_view:
+            logger.info(f"?? SpriteWindow: Ç¿ÖÆ»ØÕı×ËÊÆ£¨{duration_ms}ms£©")
+            self.live2d_view.reset_pose(duration_ms)
 
     @pyqtSlot(int, int)
     def set_position(self, x: int, y: int):
-        """è®¾ç½®çª—å£ä½ç½®"""
+        """ÉèÖÃ´°¿ÚÎ»ÖÃ"""
         self.move(x, y)
-        logger.info(f"ğŸ“ Window moved to ({x}, {y})")
+        logger.info(f"?? Window moved to ({x}, {y})")
 
     @pyqtSlot(float)
     def set_opacity(self, opacity: float):
-        """è®¾ç½®çª—å£é€æ˜åº¦ (0.0 - 1.0)"""
+        """ÉèÖÃ´°¿ÚÍ¸Ã÷¶È (0.0 - 1.0)"""
         opacity = max(0.0, min(1.0, opacity))
         self.setWindowOpacity(opacity)
-        logger.info(f"ğŸ‘» Window opacity set to {opacity}")
+        logger.info(f"?? Window opacity set to {opacity}")
 
     @pyqtSlot(str, int)
     def trigger_motion(self, group: str, index: int = 0):
-        """è§¦å‘åŠ¨ä½œ/åŠ¨ç”»"""
+        """´¥·¢¶¯×÷/¶¯»­"""
         if self.live2d_view:
             self.live2d_view.trigger_motion(group, index)
-            logger.info(f"ğŸ¬ Motion triggered: {group}[{index}]")
+            logger.info(f"?? Motion triggered: {group}[{index}]")
 
     @pyqtSlot(str, int)
     def show_message(self, text: str, duration: int = 5000):
@@ -441,30 +442,30 @@ class SherrySpriteWindow(QMainWindow):
         if self.tts_manager:
             success = self.tts_manager.set_provider(provider_name)
             if success:
-                self.show_message(f"ğŸ™ï¸ å·²åˆ‡æ¢åˆ°: {provider_name.title()}")
+                self.show_message(f"??? ÒÑÇĞ»»µ½: {provider_name.title()}")
             else:
-                self.show_message(f"âŒ åˆ‡æ¢å¤±è´¥: {provider_name}")
+                self.show_message(f"? ÇĞ»»Ê§°Ü: {provider_name}")
 
     def _test_tts(self, text: str):
         """Test TTS with given text"""
         if not HAS_TTS or not self.tts_manager:
-            self.show_message("âŒ TTS ä¸å¯ç”¨")
+            self.show_message("? TTS ²»¿ÉÓÃ")
             return
 
         # Show message
-        self.show_message(f"ğŸ—£ï¸ {text}")
+        self.show_message(f"??? {text}")
 
         # Run TTS in background thread to avoid blocking UI
         import threading
-        def run_tts():
+        def run_tts(tts_text):
             try:
-                result = self.tts_manager.speak_sync(text)
+                result = self.tts_manager.speak_sync(tts_text)
                 if not result.success:
                     logger.error(f"TTS failed: {result.error}")
             except Exception as e:
                 logger.error(f"TTS error: {e}")
 
-        thread = threading.Thread(target=run_tts, daemon=True)
+        thread = threading.Thread(target=run_tts, args=(text,), daemon=True)
         thread.start()
 
     def _toggle_lip_sync(self):
@@ -473,7 +474,7 @@ class SherrySpriteWindow(QMainWindow):
             current = getattr(self.live2d_view, '_lip_sync_enabled', True)
             self.live2d_view.set_lip_sync_enabled(not current)
             new_state = not current
-            self.show_message(f"ğŸ‘„ å£å‹åŒæ­¥: {'å¼€å¯' if new_state else 'å…³é—­'}")
+            self.show_message(f"?? ¿ÚĞÍÍ¬²½: {'¿ªÆô' if new_state else '¹Ø±Õ'}")
 
     def _get_tts_state(self) -> bool:
         """Get current TTS state from backend"""
@@ -523,18 +524,50 @@ class SherrySpriteWindow(QMainWindow):
                 
                 with urllib.request.urlopen(req, timeout=2) as response:
                     if response.status == 200:
-                        self.show_message(f"ğŸ—£ï¸ è¯­éŸ³ (TTS): {'å¼€å¯' if checked else 'å…³é—­'}")
+                        self.show_message(f"??? ÓïÒô (TTS): {'¿ªÆô' if checked else '¹Ø±Õ'}")
                     else:
-                        self.show_message(f"âš ï¸ TTS çŠ¶æ€å·²åˆ‡æ¢ (HTTP {response.status})")
+                        self.show_message(f"?? TTS ×´Ì¬ÒÑÇĞ»» (HTTP {response.status})")
                         
             except urllib.error.URLError as e:
                 logger.error(f"TTS HTTP request failed: {e}")
-                self.show_message(f"âš ï¸ TTS çŠ¶æ€å·²åˆ‡æ¢ (åç«¯æœªå“åº”)")
+                self.show_message(f"?? TTS ×´Ì¬ÒÑÇĞ»» (ºó¶ËÎ´ÏìÓ¦)")
             except Exception as e:
                 logger.error(f"TTS toggle error: {e}")
-                self.show_message(f"âš ï¸ TTS çŠ¶æ€å·²åˆ‡æ¢")
+                self.show_message(f"?? TTS ×´Ì¬ÒÑÇĞ»»")
         
         # Use QTimer to avoid blocking UI
         QTimer.singleShot(0, send_tts_request)
+
+    def _toggle_eye_tracking(self):
+        """Toggle eye tracking"""
+        if self.live2d_view and hasattr(self.live2d_view, 'set_eye_tracking_enabled'):
+            current = getattr(self.live2d_view, '_eye_tracking_enabled', True)
+            self.live2d_view.set_eye_tracking_enabled(not current)
+            new_state = not current
+            self.show_message(f"??? ÊÓÏß¸úËæ: {'¿ªÆô' if new_state else '¹Ø±Õ'}")
+
+    def closeEvent(self, event):
+        """´°¿Ú¹Ø±ÕÊÂ¼ş - ÇåÀí×ÊÔ´"""
+        logger.info("?? ´°¿Ú¹Ø±Õ£¬ÇåÀí×ÊÔ´...")
+        
+        # ÇåÀí Live2D ÊÓÍ¼
+        if self.live2d_view:
+            try:
+                self.live2d_view.cleanup()
+                logger.debug("? Live2D ÊÓÍ¼ÒÑÇåÀí")
+            except Exception as e:
+                logger.warning(f"ÇåÀí Live2D ÊÓÍ¼Ê±³ö´í: {e}")
+        
+        # ÇåÀí TTS ¹ÜÀíÆ÷
+        if self.tts_manager:
+            try:
+                self.tts_manager.cleanup()
+                logger.debug("? TTS ¹ÜÀíÆ÷ÒÑÇåÀí")
+            except Exception as e:
+                logger.warning(f"ÇåÀí TTS ¹ÜÀíÆ÷Ê±³ö´í: {e}")
+        
+        # ½ÓÊÜ¹Ø±ÕÊÂ¼ş
+        event.accept()
+        logger.info("?? ´°¿ÚÒÑ¹Ø±Õ")
 
             
