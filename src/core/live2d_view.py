@@ -611,7 +611,10 @@ class Live2DView(QOpenGLWidget):
                 return True
                 
             # 3. 设置目标表情参数
-            param_id = self.EXPRESSION_PARAM_MAP.get(name.lower())
+            # 先进行映射转换（通过_expression_mapping转换别名）
+            name_lower = name.lower()
+            mapped_name = self._expression_mapping.get(name_lower, name_lower)
+            param_id = self.EXPRESSION_PARAM_MAP.get(mapped_name)
             if param_id:
                 self.model.SetParameterValue(param_id, 1.0)
                 self.current_expression = name
