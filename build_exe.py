@@ -2,6 +2,7 @@
 """
 PyInstaller 打包脚本 for Sherry Desktop Sprite (Windows)
 使用方法: python build_exe.py
+图标: 使用花丸.png 作为程序图标
 """
 
 import sys
@@ -40,6 +41,7 @@ def main():
     # 项目根目录
     project_dir = Path(__file__).parent.absolute()
     src_dir = project_dir / "src"
+    assets_dir = src_dir / "assets"
     
     print(f"[PACK] Project: {project_dir}")
     print(f"[PACK] Source: {src_dir}")
@@ -52,6 +54,38 @@ def main():
         print("[INSTALL] PyInstaller...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
         print("[OK] PyInstaller installed")
+    
+    # 检查 PIL 是否安装（用于图标转换）
+    try:
+        from PIL import Image
+        print("[OK] PIL available for icon conversion")
+    except ImportError:
+        print("[INSTALL] Pillow...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "Pillow"], check=True)
+        print("[OK] Pillow installed")
+    
+    # 准备图标：使用花丸.png
+    icon_png = assets_dir / "models" / "hanamaru" / "花丸.png"
+    icon_ico = assets_dir / "hanamaru_icon.ico"
+    
+    # 如果图标不存在，创建它
+    if not icon_ico.exists() and icon_png.exists():
+        print(f"[ICON] Converting 花丸.png to ICO...")
+        try:
+            from PIL import Image
+            img = Image.open(icon_png).convert('RGBA')
+            sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+            img.save(icon_ico, format='ICO', sizes=sizes)
+            print(f"[OK] Created icon: {icon_ico}")
+        except Exception as e:
+            print(f"[WARN] Failed to create icon: {e}")
+            icon_ico = assets_dir / "icon.ico"  # 使用备选图标
+    
+    if not icon_ico.exists():
+        print(f"[WARN] Icon not found: {icon_ico}")
+        icon_ico = assets_dir / "icon.ico"
+    
+    print(f"[ICON] Using: {icon_ico}")
     
     # 找到 Live2D shader 路径
     shader_path = get_live2d_shaders_path()
@@ -67,7 +101,7 @@ def main():
         str(src_dir / "main.py"),
         # 输出名称
         "--name", "SherrySprite",
-        # 单目录模式
+        # 单目录模式（启动更快，适合大型应用）
         "--onedir",
         # 窗口应用程序 (无控制台)
         "--windowed",
@@ -77,12 +111,12 @@ def main():
         "--noconfirm",
         # 工作目录
         "--workpath", str(project_dir / "build"),
-        # 输出目录 (使用新目录避免冲突)
-        "--distpath", str(project_dir / "dist_new"),
-        # 图标
-        "--icon", str(src_dir / "assets" / "icon.ico"),
+        # 输出目录
+        "--distpath", str(project_dir / "dist"),
+        # 图标（使用花丸图标）
+        "--icon", str(icon_ico),
         # 添加数据文件 (模型、资源等)
-        "--add-data", f"{src_dir / 'assets'};src/assets",
+        "--add-data", f"{assets_dir};src/assets",
         # 隐藏导入
         "--hidden-import", "PyQt6.sip",
         "--hidden-import", "PyQt6.QtCore",
@@ -101,39 +135,72 @@ def main():
         "--hidden-import", "psutil",
         "--hidden-import", "loguru",
         "--hidden-import", "PIL",
+        "--hidden-import", "yaml",
         # 收集所有二进制文件
         "--collect-all", "live2d",
         "--collect-all", "PyQt6",
-        # 包含 VC++ Runtime (避免目标电脑缺少)
-        "--add-binary", r"C:\Windows\System32\msvcp140.dll;.",
-        "--add-binary", r"C:\Windows\System32\vcruntime140.dll;.",
-        "--add-binary", r"C:\Windows\System32\vcruntime140_1.dll;.",
     ]
+    
+    # 添加 VC++ Runtime (如果存在)
+    vc_dlls = [
+        r"C:\Windows\System32\msvcp140.dll",
+        r"C:\Windows\System32\vcruntime140.dll",
+        r"C:\Windows\System32\vcruntime140_1.dll",
+    ]
+    for dll in vc_dlls:
+        if os.path.exists(dll):
+            cmd.extend(["--add-binary", f"{dll};."])
     
     # 添加 Live2D shader 文件 (如果找到)
     if shader_path:
         cmd.extend(["--add-data", f"{shader_path};live2d/v3/FrameworkShaders"])
     
-    print("\n[CMD] Building...")
+    print("\n[CMD] Building with PyInstaller...")
+    print("This may take a few minutes...")
     
     # 执行 PyInstaller
     result = subprocess.run(cmd, cwd=project_dir)
     
     if result.returncode == 0:
-        print("\n[OK] Build successful!")
-        print(f"[OUT] {project_dir / 'dist_new' / 'SherrySprite' / 'SherrySprite.exe'}")
+        print("\n" + "="*60)
+        print("[OK] Build successful!")
+        print("="*60)
+        
+        exe_path = project_dir / "dist" / "SherrySprite" / "SherrySprite.exe"
+        print(f"[OUT] Executable: {exe_path}")
         
         # 创建启动批处理文件
-        bat_file = project_dir / "dist_new" / "SherrySprite" / "start.bat"
+        bat_file = project_dir / "dist" / "SherrySprite" / "启动雪莉.bat"
         with open(bat_file, 'w', encoding='utf-8') as f:
             f.write('@echo off\n')
             f.write('chcp 65001 >nul\n')
             f.write('title Sherry Desktop Sprite\n')
             f.write('echo Starting Sherry...\n')
+            f.write('echo 正在启动雪莉...\n')
             f.write('start "" "SherrySprite.exe"\n')
-        print(f"[OUT] {bat_file}")
+        print(f"[OUT] Launcher: {bat_file}")
+        
+        # 创建说明文件
+        readme_file = project_dir / "dist" / "SherrySprite" / "使用说明.txt"
+        with open(readme_file, 'w', encoding='utf-8') as f:
+            f.write("Sherry Desktop Sprite - 雪莉桌面精灵\n")
+            f.write("="*50 + "\n\n")
+            f.write("启动方式:\n")
+            f.write("1. 双击 SherrySprite.exe 启动\n")
+            f.write("2. 或双击 启动雪莉.bat 启动\n\n")
+            f.write("使用方法:\n")
+            f.write("- 右键点击雪莉打开菜单\n")
+            f.write("- 左键拖动移动位置\n")
+            f.write("- 在菜单中可以切换语言(中/日/英)\n\n")
+            f.write("配置文件:\n")
+            f.write("- 编辑 config.yaml 配置翻译API\n\n")
+        print(f"[OUT] Readme: {readme_file}")
+        
+        print("\n" + "="*60)
+        print("打包完成！输出目录: dist/SherrySprite/")
+        print("="*60)
     else:
-        print(f"\n[FAIL] Build failed: {result.returncode}")
+        print(f"\n[FAIL] Build failed with code: {result.returncode}")
         return 1
     
     return 0

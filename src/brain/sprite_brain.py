@@ -260,16 +260,17 @@ class SpriteBrain:
             logger.info("🐭 语音播放结束")
             return result
 
-    async def trigger_motion(self, group: str, interactive: bool = True):
+    async def trigger_motion(self, group: str, interactive: bool = True, force: bool = True):
         """
         触发动作
         Args:
             group: 动作组名
             interactive: 是否为用户交互（会影响空闲计时器）
+            force: 是否强制播放（默认True）。对于循环动作如Idle，设为False可避免重复触发
         """
         if interactive:
             self.reset_idle_timer("motion")  # 用户交互，重置空闲计时
-        return await self.send_command("motion", {"group": group})
+        return await self.send_command("motion", {"group": group, "force": force})
     
     async def set_expression(self, expression_name: str, interactive: bool = True):
         """
@@ -332,8 +333,9 @@ class SpriteBrain:
                 self.idle_motion_playing = True
                 logger.info("🎬 尝试播放待机动画...")
                 # 尝试触发 Idle 动画，但失败时不影响流程
+                # 🚨 【关键修复】使用 force=False 避免重复打断已在播放的Idle
                 try:
-                    result = await self.trigger_motion("Idle", interactive=False)
+                    result = await self.trigger_motion("Idle", interactive=False, force=False)
                     if result:
                         logger.info("✅ 待机动画播放成功")
                     else:

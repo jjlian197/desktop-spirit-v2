@@ -319,6 +319,26 @@ class SherrySpriteWindow(QMainWindow):
             no_tts_action.setEnabled(False)
             provider_menu.addAction(no_tts_action)
 
+        # Language selection submenu
+        lang_menu = tts_menu.addMenu("🌐 语言")
+        languages = [
+            ("🇨🇳 中文", "zh"),
+            ("🇺🇸 English", "en"),
+            ("🇯🇵 日本語", "ja"),
+        ]
+        if HAS_TTS and self.tts_manager:
+            current_lang = getattr(self.tts_manager, '_current_language', 'zh')
+            for label, lang_code in languages:
+                action = QAction(label, self)
+                action.setCheckable(True)
+                action.setChecked(current_lang == lang_code)
+                action.triggered.connect(lambda checked, l=lang_code: self._switch_language(l))
+                lang_menu.addAction(action)
+        else:
+            no_lang_action = QAction("TTS 不可用", self)
+            no_lang_action.setEnabled(False)
+            lang_menu.addAction(no_lang_action)
+
         tts_menu.addSeparator()
 
         # Test phrases
@@ -445,6 +465,17 @@ class SherrySpriteWindow(QMainWindow):
                 self.show_message(f"🎙️ 已切换到: {provider_name.title()}")
             else:
                 self.show_message(f"❌ 切换失败: {provider_name}")
+
+    def _switch_language(self, lang_code: str):
+        """Switch TTS language"""
+        if self.tts_manager and hasattr(self.tts_manager, 'set_language'):
+            success = self.tts_manager.set_language(lang_code)
+            lang_names = {"zh": "中文", "en": "English", "ja": "日本語"}
+            lang_name = lang_names.get(lang_code, lang_code)
+            if success:
+                self.show_message(f"🌐 语言已切换: {lang_name}")
+            else:
+                self.show_message(f"❌ 语言切换失败: {lang_name}")
 
     def _test_tts(self, text: str):
         """Test TTS with given text"""

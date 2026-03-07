@@ -16,6 +16,7 @@ from loguru import logger
 
 from src.core.sprite_window import SherrySpriteWindow
 from src.core.websocket_server import WebSocketServer
+from src.core.http_server import HTTPServer
 from src.utils.logger import setup_logging
 from src.core.lip_sync_websocket import LipSyncWebSocketBroadcaster
 from src.brain.sprite_brain import SpriteBrain
@@ -132,6 +133,18 @@ def main():
     ws_server = WebSocketServer(window)
     ws_server.start()
     
+    # Start HTTP API server in background
+    import threading
+    import asyncio
+    http_server = HTTPServer(window, host="127.0.0.1", port=8766)
+    
+    def run_http_server():
+        """Run HTTP server in background thread"""
+        asyncio.run(http_server.start())
+    
+    http_thread = threading.Thread(target=run_http_server, daemon=True)
+    http_thread.start()
+    
     # 🚨 【触觉反馈】连接触摸事件到 WebSocket 广播
     def on_touch_event(action, part):
         """当雪莉被触摸时，广播到大脑（线程安全）"""
@@ -147,6 +160,7 @@ def main():
     
     logger.info("✅ Sherry Desktop Sprite started successfully!")
     logger.info("   WebSocket: ws://127.0.0.1:8765/sprite")
+    logger.info("   HTTP API: http://127.0.0.1:8766")
     
     # Start Brain thread (精灵大脑)
     brain_thread = BrainThread()

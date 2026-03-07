@@ -1,0 +1,11 @@
+# 高质量翻译依赖
+# 安装: pip install -r requirements-translate.txt
+
+# 推荐：OpenAI 翻译（质量最好，成本低）
+openai>=1.0.0
+
+# 备选：Claude 翻译
+# anthropic>=0.21.0
+
+# 备选：Google 翻译（免费，质量一般）
+deep-translator>=1.11.0

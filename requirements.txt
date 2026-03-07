@@ -22,3 +22,16 @@ loguru>=0.7.0
 
 # macOS Native Window Level Support (optional, for advanced always-on-top)
 pyobjc>=9.0; sys_platform == 'darwin'
+
+# ============ Translation (Optional) ============
+# For AI translation with OpenAI
+# openai>=1.0.0
+
+# For AI translation with Claude
+# anthropic>=0.21.0
+
+# For basic Google translation (fallback)
+# deep-translator>=1.11.0
+
+# For Google translation alternative
+# googletrans==4.0.0-rc1

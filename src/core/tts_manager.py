@@ -8,9 +8,16 @@ Handles audio playback and lip sync integration
 import os
 import sys
 
+# Import asyncio first to avoid subprocess.Popen type issues on Windows
+import asyncio
+import tempfile
+import subprocess
+import wave
+import struct
+import random
+
 # Windows: 全局设置 subprocess 不显示终端窗口
 if sys.platform == 'win32':
-    import subprocess
     # 创建一个启动信息对象，隐藏终端窗口
     _startupinfo = subprocess.STARTUPINFO()
     _startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -48,60 +55,36 @@ if sys.platform == 'win32':
         os.environ["FFMPEG_BINARY"] = os.path.join(ffmpeg_bin, "ffmpeg.exe")
         os.environ["FFPROBE_BINARY"] = os.path.join(ffmpeg_bin, "ffprobe.exe")
 
-import asyncio
-import tempfile
-# subprocess 已在文件开头导入并设置全局 hook
-import wave
-import struct
-import random
 import numpy as np
-from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Callable, List, Dict, Any
-from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
+
+# Import base classes from separate module to avoid circular imports
+from src.core.tts_provider_base import BaseTTSProvider, TTSResult
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
 from loguru import logger
+
+# Import GPT-SoVITS provider (optional)
+try:
+    from src.core.gpt_sovits_provider import GPTSoVITSProvider, GPTSoVITSConfig
+    GPT_SOVITS_AVAILABLE = True
+except ImportError:
+    GPT_SOVITS_AVAILABLE = False
+
+# Import translator (optional)
+try:
+    from src.core.translator import SmartTranslator, create_translator
+    TRANSLATOR_AVAILABLE = True
+except ImportError:
+    TRANSLATOR_AVAILABLE = False
 
 
 def is_apple_silicon() -> bool:
     """Check if running on Apple Silicon"""
     import platform
     return platform.machine() == 'arm64' and platform.system() == 'Darwin'
-
-
-@dataclass
-class TTSResult:
-    """Result from TTS generation"""
-    audio_path: str
-    text: str
-    duration_ms: float
-    sample_rate: int
-    success: bool
-    error: Optional[str] = None
-
-
-class BaseTTSProvider(ABC):
-    """Base class for TTS providers"""
-    
-    def __init__(self, name: str):
-        self.name = name
-        self._initialized = False
-    
-    @abstractmethod
-    async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
-        """Generate and return audio file path"""
-        pass
-    
-    @abstractmethod
-    def is_available(self) -> bool:
-        """Check if provider is available"""
-        pass
-    
-    async def warmup(self):
-        """Warm up the provider (optional)"""
-        pass
 
 
 class EdgeTTSProvider(BaseTTSProvider):
@@ -508,14 +491,54 @@ class TTSManager(QObject):
     def __init__(self, parent=None, preferred_provider: str = "edge"):
         super().__init__(parent)
         
+        # Load config if available
+        config = self._load_config()
+        tts_config = config.get("tts", {})
+        
         # Initialize providers
+        edge_config = tts_config.get("edge", {})
         self.providers: Dict[str, BaseTTSProvider] = {
-            "edge": EdgeTTSProvider(),
+            "edge": EdgeTTSProvider(
+                voice=edge_config.get("voice"),
+                rate=edge_config.get("rate", "+0%"),
+                pitch=edge_config.get("pitch", "+0Hz")
+            ),
             "elevenlabs": ElevenLabsProvider(),
             "local": LocalTTSProvider(),
         }
         
-        self.current_provider = self._select_provider(preferred_provider)
+        # Add GPT-SoVITS provider if available
+        if GPT_SOVITS_AVAILABLE:
+            gptsovits_cfg = tts_config.get("gptsovits", {})
+            if gptsovits_cfg.get("enabled", False):
+                # Create config from yaml (api_v2 format)
+                gs_config = GPTSoVITSConfig(
+                    api_url=gptsovits_cfg.get("api_url", "http://127.0.0.1:9880/tts"),
+                    text_language=gptsovits_cfg.get("text_lang", "zh"),
+                    refer_wav_path=gptsovits_cfg.get("refer_audio_path"),
+                    prompt_text=gptsovits_cfg.get("prompt_text"),
+                    prompt_language=gptsovits_cfg.get("prompt_lang", "zh"),
+                    # api_v2 specific parameters
+                    text_split_method=gptsovits_cfg.get("text_split_method", "cut5"),
+                    batch_size=gptsovits_cfg.get("batch_size", 1),
+                    media_type=gptsovits_cfg.get("media_type", "wav"),
+                    streaming_mode=gptsovits_cfg.get("streaming_mode", False),
+                    # Legacy parameters
+                    top_k=gptsovits_cfg.get("top_k", 20),
+                    top_p=gptsovits_cfg.get("top_p", 0.6),
+                    temperature=gptsovits_cfg.get("temperature", 0.6),
+                    speed=gptsovits_cfg.get("speed", 1.0),
+                )
+                self.providers["gptsovits"] = GPTSoVITSProvider(gs_config)
+                logger.info("🎙️ GPT-SoVITS provider loaded with config")
+            else:
+                # Default config
+                self.providers["gptsovits"] = GPTSoVITSProvider()
+                logger.info("🎙️ GPT-SoVITS provider loaded (default config)")
+        
+        # Use config default provider if available
+        default_provider = tts_config.get("default_provider", preferred_provider)
+        self.current_provider = self._select_provider(default_provider)
         self.audio_analyzer = AudioAnalyzer(frame_rate=30)
         
         # Playback state
@@ -531,7 +554,61 @@ class TTSManager(QObject):
         # Cleanup tracking
         self._temp_files: List[str] = []
         
+        # Translation support with AI translator
+        self._auto_translate = tts_config.get("auto_translate", True)
+        self._current_language = "zh"  # 当前语言
+        
+        # Initialize translator with config
+        if TRANSLATOR_AVAILABLE:
+            translation_cfg = tts_config.get("translation", {})
+            
+            # 构建配置
+            translator_config = {
+                "provider": translation_cfg.get("provider"),
+                "api_key": translation_cfg.get("api_key"),
+                "api_base": translation_cfg.get("api_base"),
+                "model": translation_cfg.get("model"),
+                "use_cache": translation_cfg.get("use_cache", True),
+                "china": translation_cfg.get("china")  # 国内翻译API配置
+            }
+            
+            # 如果配置了 provider 或 china，使用配置创建
+            if translator_config["provider"] or translator_config["china"]:
+                self._translator = create_translator(translator_config)
+            else:
+                # 尝试从环境变量自动检测
+                self._translator = create_translator()
+        else:
+            self._translator = None
+        
+        # 记录翻译器状态
         logger.info(f"🎙️ TTSManager initialized with provider: {self.current_provider.name}")
+        if self._translator and self._translator.is_available():
+            provider_parts = []
+            if self._translator.ai_translator:
+                provider_parts.append(self._translator.ai_translator.provider)
+            if self._translator.china_translator and self._translator.china_translator.is_available():
+                china_names = [t.__class__.__name__.replace("Translator", "") 
+                              for t in self._translator.china_translator.available_translators]
+                provider_parts.extend(china_names)
+            if not provider_parts:
+                provider_parts.append("Google")
+            
+            logger.info(f"🌐 Auto-translation enabled ({', '.join(provider_parts)})")
+        else:
+            logger.info("🌐 Auto-translation disabled")
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """Load configuration from config.yaml"""
+        try:
+            import yaml
+            config_path = Path(__file__).parent.parent.parent / "config.yaml"
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    return yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.debug(f"Failed to load config: {e}")
+        return {}
     
     def _select_provider(self, preferred: str) -> BaseTTSProvider:
         """Select best available provider"""
@@ -568,12 +645,142 @@ class TTSManager(QObject):
         """Get list of available provider names"""
         return [name for name, p in self.providers.items() if p.is_available()]
     
+    def update_gptsovits_config(self, **kwargs) -> bool:
+        """
+        更新 GPT-SoVITS 配置
+        
+        Args:
+            api_url: API 地址
+            refer_wav_path: 参考音频路径
+            prompt_text: 参考音频文本
+            text_language: 文本语言
+            prompt_language: 参考音频语言
+            top_k, top_p, temperature, speed: 生成参数
+        
+        Returns:
+            bool: 是否成功更新
+        """
+        if "gptsovits" not in self.providers:
+            logger.error("GPT-SoVITS provider not available")
+            return False
+        
+        provider = self.providers["gptsovits"]
+        if hasattr(provider, 'update_config'):
+            provider.update_config(**kwargs)
+            return True
+        return False
+    
+    def set_gptsovits_voice(self, refer_wav_path: str, prompt_text: str = None, prompt_language: str = "zh") -> bool:
+        """
+        设置 GPT-SoVITS 的参考音频（切换音色）
+        
+        Args:
+            refer_wav_path: 参考音频文件路径
+            prompt_text: 参考音频对应的文本
+            prompt_language: 参考音频语言
+        
+        Returns:
+            bool: 是否成功设置
+        """
+        return self.update_gptsovits_config(
+            refer_wav_path=refer_wav_path,
+            prompt_text=prompt_text,
+            prompt_language=prompt_language
+        )
+    
+    def set_edge_voice(self, voice: str) -> bool:
+        """
+        设置 Edge TTS 语音
+        
+        Args:
+            voice: Edge TTS 语音 ID
+                  日文语音: ja-JP-NanamiNeural, ja-JP-KeitaNeural, ja-JP-MayuNeural, ja-JP-AoiNeural
+                  中文语音: zh-CN-XiaoxiaoNeural, zh-CN-YunjianNeural, zh-CN-YunxiNeural
+        
+        Returns:
+            bool: 是否成功设置
+        """
+        if "edge" not in self.providers:
+            logger.error("Edge TTS provider not available")
+            return False
+        
+        provider = self.providers["edge"]
+        if hasattr(provider, 'voice'):
+            provider.voice = voice
+            logger.info(f"🎙️ Edge TTS voice switched to: {voice}")
+            return True
+        return False
+    
+    def set_language(self, lang: str) -> bool:
+        """
+        快速切换语言设置
+        
+        Args:
+            lang: "zh" (中文), "ja" (日文), "en" (英文)
+        
+        Returns:
+            bool: 是否成功设置
+        """
+        success = False
+        
+        # 切换 Edge TTS 语音
+        edge_voices = {
+            "zh": "zh-CN-XiaoxiaoNeural",
+            "ja": "ja-JP-NanamiNeural",
+            "en": "en-US-AriaNeural"
+        }
+        if lang in edge_voices:
+            success = self.set_edge_voice(edge_voices[lang]) or success
+        
+        # 切换 GPT-SoVITS 语言
+        if "gptsovits" in self.providers:
+            success = self.update_gptsovits_config(
+                text_language=lang,
+                prompt_language=lang
+            ) or success
+        
+        if success:
+            self._current_language = lang
+            logger.info(f"🌐 Language switched to: {lang}")
+        return success
+    
+    def set_auto_translate(self, enabled: bool):
+        """
+        设置是否启用自动翻译
+        
+        Args:
+            enabled: True 启用自动翻译，False 禁用
+        """
+        self._auto_translate = enabled
+        logger.info(f"🌐 Auto-translate: {'enabled' if enabled else 'disabled'}")
+    
+    async def _translate_text(self, text: str) -> str:
+        """
+        翻译文本到当前目标语言
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            翻译后的文本
+        """
+        if not self._translator or not self._translator.is_available():
+            return text
+        
+        if not self._auto_translate:
+            return text
+        
+        # 翻译到当前语言
+        return await self._translator.translate(text, target_lang=self._current_language)
+    
     async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
         """
         Generate and play TTS audio with lip sync
         
+        如果启用了自动翻译且当前语言不是中文，会自动翻译文本
+        
         Args:
-            text: Text to speak
+            text: Text to speak (会自动翻译到当前设置的语言)
             voice_id: Optional voice ID override
             
         Returns:
@@ -585,12 +792,20 @@ class TTSManager(QObject):
             while self._is_speaking:
                 await asyncio.sleep(0.1)
         
+        # 翻译文本（如果需要）
+        original_text = text
+        translated_text = await self._translate_text(text)
+        
+        if translated_text != original_text:
+            logger.info(f"🌐 原文: '{original_text[:50]}...'")
+            logger.info(f"🌐 译文: '{translated_text[:50]}...'")
+        
         self._is_speaking = True
-        self.tts_started.emit(text)
+        self.tts_started.emit(translated_text)
         
         try:
-            # Generate audio
-            result = await self.current_provider.speak(text, voice_id)
+            # Generate audio with translated text
+            result = await self.current_provider.speak(translated_text, voice_id)
             
             if not result.success:
                 self.tts_error.emit(result.error or "Unknown TTS error")

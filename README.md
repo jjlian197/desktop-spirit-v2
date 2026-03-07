@@ -11,33 +11,48 @@
 - 🎭 **Live2D Support** - Smooth 2D character animation with physics and expressions
 - 😊 **Expression Control** - 43+ facial expressions and poses via WebSocket API
 - 🪟 **Transparent Window** - Frameless, always-on-top display
-- 🔌 **WebSocket API** - Remote control for expression, motion, and messages
+- 🎨 **Dynamic Background** - Change background color/image/gradient via API
+- 🔌 **WebSocket & HTTP API** - Remote control for all features
 - 💬 **Bubble Messages** - Floating speech bubbles
-- 🔊 **TTS Integration** - Text-to-speech using macOS `say` command
+- 🔊 **TTS Integration** - Text-to-speech with multi-language support
+- 🌐 **AI Translation** - Support OpenAI/Baidu/Youdao/Niutrans for quality translation
 - 🔄 **Auto-Restart** - launchd integration for 24/7 uptime
 - 🖱️ **Draggable** - Click and drag to move anywhere
+- 🌸 **Japanese Voice** - Auto-translate Chinese to Japanese with natural voice
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- macOS 11+ (Apple Silicon or Intel)
-- Python 3.9+
+- **macOS**: 11+ (Apple Silicon or Intel)
+- **Windows**: Windows 10/11
+- **Python**: 3.9+
 
 ### Installation
 
 ```bash
 # Clone or navigate to project
-cd /Users/mylianjie/.openclaw/workspace/projects/sherry-desktop-sprite
+cd /path/to/sherry-desktop-sprite
 
 # Install dependencies
-pip3 install -r requirements.txt
+pip install -r requirements.txt
 
 # Run the sprite
-python3 src/main.py
+python src/main.py
 ```
 
-### Install as Service (Auto-start)
+### Windows 打包（生成 EXE）
+
+```bash
+# 一键打包（使用花丸图标）
+python build_exe.py
+
+# 输出: dist/SherrySprite/SherrySprite.exe
+```
+
+详见 [打包指南](./docs/BUILD_GUIDE.md)
+
+### macOS Install as Service (Auto-start)
 
 ```bash
 ./scripts/install.sh
@@ -76,8 +91,9 @@ asyncio.run(say_hello())
 | `message` | Show bubble text |
 | `speak` | Text-to-speech |
 | `window` | Control window (move, opacity, hide/show) |
+| `background` | Change background (color/image/gradient) |
 
-See [docs/API.md](docs/API.md) for full API documentation and [docs/EXPRESSIONS.md](docs/EXPRESSIONS.md) for expression reference.
+See [docs/API.md](docs/API.md) and [docs/BACKGROUND_API.md](docs/BACKGROUND_API.md) for full API documentation.
 
 ## 📁 Project Structure
 
@@ -90,6 +106,7 @@ sherry-desktop-sprite/
 │   │   ├── sprite_window.py    # PyQt6 transparent window
 │   │   ├── live2d_view.py      # Live2D renderer
 │   │   ├── websocket_server.py # WebSocket control
+│   │   ├── http_server.py      # HTTP API server
 │   │   ├── tts_manager.py      # Text-to-speech
 │   │   └── lip_sync_websocket.py # Lip sync
 │   ├── brain/                  # 🧠 AI & Intelligence
@@ -127,12 +144,20 @@ sherry-desktop-sprite/
 ├── docs/                       # Documentation
 │   ├── API.md                  # API reference
 │   ├── DEPLOY.md               # Deployment guide
+│   ├── BUILD_GUIDE.md          # 📦 Windows packaging guide
+│   ├── BACKGROUND_API.md       # 🎨 Background change API
 │   ├── MODELS.md               # Model setup
 │   ├── EXPRESSIONS.md          # Expression list
 │   ├── BODY_PARAMETERS.md      # Body parameter reference
 │   ├── MOUSE_FOLLOW_GUIDE.md   # Mouse follow tutorial
 │   ├── SPRITE_BRAIN_GUIDE.md   # Brain system guide
-│   └── APPLE_SILICON_FIX.md    # Apple Silicon notes
+│   ├── APPLE_SILICON_FIX.md    # Apple Silicon notes
+│   ├── JAPANESE_TTS_GUIDE.md   # 🇯🇵 Japanese voice setup
+│   ├── CHINA_TRANSLATION_API.md # 🇨🇳 Chinese translation APIs
+│   ├── TRANSLATION_QUICKSTART.md # 🌐 Translation quick start
+│   └── RIGHT_CLICK_MENU.md     # 🖱️ Right-click menu guide
+├── build_exe.py                # 📦 Windows EXE builder
+├── SherrySprite.spec           # PyInstaller spec file
 ├── tests/                      # Test client
 │   └── test_client.py
 ├── config.yaml                 # Main configuration
