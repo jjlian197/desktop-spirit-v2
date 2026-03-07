@@ -12,11 +12,18 @@ Uses live2d-py for Python bindings to Live2D Cubism SDK
 import os
 import platform
 import sys
+import json
+import urllib.request
+import urllib.error
 from pathlib import Path
 from typing import Optional, Dict, List
 
 # Check if running on Apple Silicon
 IS_APPLE_SILICON = platform.machine() == 'arm64' and platform.system() == 'Darwin'
+
+# Brain HTTP API 配置
+BRAIN_HTTP_PORT = 8766
+BRAIN_HTTP_HOST = "127.0.0.1"
 
 
 def get_project_dir() -> str:
@@ -64,13 +71,7 @@ except ImportError as e:
     HAS_LIVE2D = False
     logger.warning(f"live2d-py not installed: {e}")
 
-# Import MotionPlayer
-try:
-    from src.core.motion_player import MotionPlayer
-    HAS_MOTION_PLAYER = True
-except ImportError:
-    HAS_MOTION_PLAYER = False
-    logger.warning("MotionPlayer not available")
+
 
 # Import TTS Manager for lip sync
 try:
@@ -182,6 +183,16 @@ class Live2DView(QOpenGLWidget):
         self.setMouseTracking(True)
         self.mouse_x = 0.0
         self.mouse_y = 0.0
+        
+        # 🚨 鼠标跟随开关
+        self._mouse_follow_enabled = True
+        
+        # 🚨 动作播放状态（用于暂停鼠标跟随）
+        self._motion_playing = False
+        self._current_motion_group = None
+        
+        # 🚨 TTS 说话状态（用于回正）
+        self._tts_speaking = False
 
         # Setup update timer
         self.update_timer = QTimer(self)
@@ -192,9 +203,10 @@ class Live2DView(QOpenGLWidget):
         self._lip_sync_timer.timeout.connect(self._update_lip_sync)
         self._lip_sync_timer.start(16)  # ~60fps
         
-        # Motion player for fallback when StartMotion doesn't work
-        self._motion_player: Optional[MotionPlayer] = None
-        self._motion_files: Dict[str, Path] = {}
+        # 🚨 动作状态检查定时器（用于检测非 Idle 动作是否播放完成）
+        self._motion_check_timer = QTimer(self)
+        self._motion_check_timer.timeout.connect(self._check_motion_finished)
+        self._motion_check_timer.start(100)  # 100ms 检查一次
 
         # Connect to TTS manager for lip sync
         self._connect_tts_manager()
@@ -207,9 +219,128 @@ class Live2DView(QOpenGLWidget):
             try:
                 tts = get_tts_manager()
                 tts.lip_sync_frame.connect(self._on_lip_sync_frame)
+                # 🚨 连接 TTS 开始/结束信号
+                tts.tts_started.connect(self._on_tts_started)
+                tts.tts_finished.connect(self._on_tts_finished)
                 logger.info("✅ Lip sync connected to TTS manager")
             except Exception as e:
                 logger.warning(f"Failed to connect TTS manager: {e}")
+    
+    def _on_tts_started(self, text: str):
+        """TTS 开始说话时触发 - 设置回正状态"""
+        logger.info("🎙️ TTS started, resetting to center position")
+        self._tts_speaking = True
+        # 发送回正参数给大脑
+        self._reset_to_center()
+    
+    def _on_tts_finished(self):
+        """TTS 说话结束时触发"""
+        logger.info("🎙️ TTS finished, resuming normal tracking")
+        self._tts_speaking = False
+    
+    def _get_offset_values(self) -> Dict[str, float]:
+        """从 Brain HTTP API 获取鼠标跟随的偏移值"""
+        try:
+            req = urllib.request.Request(
+                f"http://{BRAIN_HTTP_HOST}:{BRAIN_HTTP_PORT}/health",
+                method='GET'
+            )
+            with urllib.request.urlopen(req, timeout=1) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+                    # 从 health 端点获取 mouse_config 中的偏移值
+                    # 如果 API 支持，可以直接获取完整的 mouse_config
+                    # 这里使用默认值作为后备
+                    return {
+                        "offset_angle_x": data.get("mouse_offset_angle_x", 25.0),
+                        "offset_angle_y": data.get("mouse_offset_angle_y", -30.0),
+                        "offset_angle_z": data.get("mouse_offset_angle_z", -30.0),
+                        "offset_body_x": data.get("mouse_offset_body_x", 15.0),
+                        "offset_eye_x": data.get("mouse_offset_eye_x", 0.5),
+                        "offset_eye_y": data.get("mouse_offset_eye_y", 0.0),
+                    }
+        except Exception as e:
+            logger.debug(f"Failed to get offset values from brain: {e}")
+        
+        # 返回默认值
+        return {
+            "offset_angle_x": 25.0,
+            "offset_angle_y": -30.0,
+            "offset_angle_z": -30.0,
+            "offset_body_x": 15.0,
+            "offset_eye_x": 0.5,
+            "offset_eye_y": 0.0,
+        }
+    
+    def _reset_to_center(self):
+        """发送回正参数（从 brain 获取偏移值）"""
+        if not self.model or not HAS_LIVE2D:
+            return
+        
+        # 🚨 从 brain 获取偏移值
+        offsets = self._get_offset_values()
+        
+        center_params = {
+            "ParamAngleX": offsets["offset_angle_x"],
+            "ParamAngleY": offsets["offset_angle_y"],
+            "ParamAngleZ": offsets["offset_angle_z"],
+            "ParamBodyAngleX": offsets["offset_body_x"],
+            "ParamBodyAngleY": 0.0,
+            "ParamBodyAngleZ": 0.0,
+            "ParamEyeBallX": offsets["offset_eye_x"],
+            "ParamEyeBallY": offsets["offset_eye_y"],
+        }
+        try:
+            for param_id, value in center_params.items():
+                self.model.SetParameterValue(param_id, value)
+            logger.debug(f"✅ Center position reset with offsets from brain: X={offsets['offset_angle_x']}, Y={offsets['offset_angle_y']}")
+        except Exception as e:
+            logger.debug(f"Failed to reset center position: {e}")
+    
+    def set_mouse_follow_enabled(self, enabled: bool):
+        """设置鼠标跟随开关"""
+        self._mouse_follow_enabled = enabled
+        logger.info(f"🖱️ Mouse follow {'enabled' if enabled else 'disabled'}")
+        # 如果禁用，发送回正参数
+        if not enabled:
+            self._reset_to_center()
+    
+    def is_mouse_follow_enabled(self) -> bool:
+        """获取鼠标跟随状态"""
+        return self._mouse_follow_enabled
+    
+    def is_motion_playing(self) -> bool:
+        """检查是否正在播放非 Idle 动作"""
+        return self._motion_playing
+    
+    def is_tts_speaking(self) -> bool:
+        """检查是否正在说话"""
+        return self._tts_speaking
+    
+    def should_pause_mouse_follow(self) -> bool:
+        """检查是否应该暂停鼠标跟随"""
+        # 暂停条件：1. 鼠标跟随被禁用 2. 正在播放非 Idle 动作 3. 正在说话
+        if not self._mouse_follow_enabled:
+            return True
+        if self._tts_speaking:
+            return True
+        if self._motion_playing and self._current_motion_group and self._current_motion_group.lower() != "idle":
+            return True
+        return False
+    
+    def _check_motion_finished(self):
+        """检查非 Idle 动作是否播放完成"""
+        if not self._motion_playing or not self.model or not HAS_LIVE2D:
+            return
+        
+        try:
+            # 使用 IsMotionFinished 检查动作是否完成
+            if hasattr(self.model, 'IsMotionFinished') and self.model.IsMotionFinished():
+                logger.info(f"🎬 Motion finished: {self._current_motion_group}, resuming mouse follow")
+                self._motion_playing = False
+                self._current_motion_group = None
+        except Exception as e:
+            logger.debug(f"Failed to check motion status: {e}")
 
     @pyqtSlot(float)
     def _on_lip_sync_frame(self, mouth_open: float):
@@ -366,11 +497,36 @@ class Live2DView(QOpenGLWidget):
                 return False
             logger.info(f"✅ LAppModel created: {type(model)}")
             
-            model.LoadModelJson(str(model_json))
+            # 🚨 加载模型
+            model_json_str = str(model_json.absolute())
+            logger.info(f"📂 Loading model with path: {model_json_str}")
+            model.LoadModelJson(model_json_str)
+            
+            # 🚨 调用 Update 来初始化模型状态（可能对动作加载很重要）
+            try:
+                model.Update(0)  # 使用 0 时间间隔进行初始化更新
+                logger.info("✅ Initial model Update called")
+            except Exception as e:
+                logger.debug(f"Initial Update error (may be normal): {e}")
+            
             self.model_path = model_path
             
             # 💜 成功后才赋值给 self.model
             self.model = model
+            
+            # 🚨 立即检查 motion groups（调试用）
+            try:
+                if hasattr(self.model, 'GetMotionGroups'):
+                    groups = self.model.GetMotionGroups()
+                    logger.info(f"📋 Motion groups after LoadModelJson: {groups}")
+                if hasattr(self.model, 'GetMotions'):
+                    motions = self.model.GetMotions()
+                    logger.info(f"📋 Motions after LoadModelJson: {motions}")
+                if hasattr(self.model, 'GetModelHomeDir'):
+                    home_dir = self.model.GetModelHomeDir()
+                    logger.info(f"📋 Model home dir: {home_dir}")
+            except Exception as e:
+                logger.debug(f"Could not get motion info: {e}")
             
             # 🚨 预加载动作文件
             self._preload_motions(model_dir)
@@ -392,39 +548,24 @@ class Live2DView(QOpenGLWidget):
             return False
     
     def _preload_motions(self, model_dir: Path):
-        """🚨 预加载动作文件到模型 - 同时注册到 MotionPlayer 作为备选"""
+        """预加载动作文件到模型 - 检查动作是否正确加载"""
         if not self.model or not HAS_LIVE2D:
             return
         
-        # 动作组映射：动作组名 -> 文件名
-        motion_mapping = {
-            "Tap": "摸摸头.motion3.json",
-            "Idle": "待机动画.motion3.json",
-        }
+        logger.info("🔍 Checking motion groups after model load...")
         
-        logger.info(f"🔍 Loading motions for groups: {list(motion_mapping.keys())}")
-        
-        # 初始化 MotionPlayer
-        if HAS_MOTION_PLAYER:
-            self._motion_player = MotionPlayer(self._set_motion_param)
-        
-        for group_name, filename in motion_mapping.items():
-            motion_file = model_dir / filename
-            if not motion_file.exists():
-                logger.warning(f"⚠️ Motion file not found: {motion_file}")
-                continue
-            
-            # 保存文件路径供 MotionPlayer 使用
-            self._motion_files[group_name] = motion_file
-            logger.info(f"✅ Registered motion: {group_name} -> {filename}")
+        # 检查当前已加载的 motion groups
+        try:
+            if hasattr(self.model, 'GetMotionGroups'):
+                groups = self.model.GetMotionGroups()
+                logger.info(f"📋 Motion groups: {groups}")
+            if hasattr(self.model, 'GetMotions'):
+                motions = self.model.GetMotions()
+                logger.info(f"📋 Motions: {motions}")
+        except Exception as e:
+            logger.debug(f"Could not get motion info: {e}")
     
-    def _set_motion_param(self, param_id: str, value: float):
-        """MotionPlayer 的参数设置回调"""
-        if self.model and HAS_LIVE2D:
-            try:
-                self.model.SetParameterValue(param_id, value)
-            except Exception as e:
-                logger.debug(f"Failed to set motion param {param_id}: {e}")
+
     
     def set_big_head_mode(self, enabled: bool):
         self.is_big_head = enabled
@@ -617,36 +758,52 @@ class Live2DView(QOpenGLWidget):
             return []
     
     def trigger_motion(self, group: str, index: int = 0):
-        """🚨 【触觉反馈】触发动画/动作"""
+        """🚨 【触觉反馈】触发动画/动作 - 使用原生 StartMotion"""
         if not self.model or not HAS_LIVE2D:
             logger.warning("Cannot trigger motion: model not loaded")
             return False
         
-        # 首先尝试使用 MotionPlayer（更可靠）
-        if self._motion_player and group in self._motion_files:
-            try:
-                motion_file = self._motion_files[group]
-                logger.info(f"🎬 Playing motion via MotionPlayer: {group}")
-                self._motion_player.play(motion_file, loop=False)
-                return True
-            except Exception as e:
-                logger.warning(f"MotionPlayer failed, falling back to StartMotion: {e}")
+        # 🚨 更新动作播放状态
+        is_idle = group.lower() == "idle"
+        self._current_motion_group = group
         
-        # 备选：使用原生 StartMotion
+        # 🚨 非 Idle 动画播放时标记为正在播放
+        if not is_idle:
+            self._motion_playing = True
+            logger.info(f"🎬 Non-idle motion started: {group}, mouse follow paused")
+        
+        # 🚨 如果 motion groups 为空，尝试手动加载动作
+        model_dir = Path(self.model_path) if self.model_path else None
+        if model_dir:
+            motion_file = model_dir / f"{group}.motion3.json"
+            if motion_file.exists():
+                logger.info(f"📂 Found motion file: {motion_file}")
+                # 尝试使用 LoadExtraMotion 如果存在
+                if hasattr(self.model, 'LoadExtraMotion'):
+                    try:
+                        result = self.model.LoadExtraMotion(group, str(motion_file.absolute()))
+                        logger.info(f"✅ LoadExtraMotion result: {result}")
+                    except Exception as e:
+                        logger.error(f"❌ LoadExtraMotion failed: {e}")
+        
+        # 🚨 尝试使用 StartRandomMotion 作为备选
         try:
             priority = live2d.MotionPriority.FORCE
-            logger.info(f"🎬 Starting motion: {group}[{index}] (priority={priority})...")
-            result = self.model.StartMotion(group, index, priority)
-            if result is not None:
-                logger.info(f"✅ Motion started: {group}[{index}]")
-                return True
-            else:
-                logger.warning(f"⚠️ StartMotion returned None for: {group}[{index}]")
-                return False
+            logger.info(f"🎬 Trying StartMotion: {group} index {index} (priority={priority})...")
+            
+            # 首先尝试 StartMotion
+            # 🚨 StartMotion 返回 None 是正常行为（void 函数），不代表失败
+            self.model.StartMotion(group, index, priority)
+            logger.info(f"✅ Motion started: {group} index {index}")
+            return True
+                
         except Exception as e:
             logger.error(f"❌ Motion trigger failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            # 失败时重置状态
+            if not is_idle:
+                self._motion_playing = False
             return False
     
 

@@ -13,7 +13,19 @@
 			"textures/texture_07.png"
 		],
 		"Physics": "model.physics3.json",
-		"DisplayInfo": "model.cdi3.json"
+		"DisplayInfo": "model.cdi3.json",
+		"Motions": {
+			"Tap": [
+				{
+					"File": "Tap.motion3.json"
+				}
+			],
+			"Idle": [
+				{
+					"File": "Idle.motion3.json"
+				}
+			]
+		}
 	},
 	"Groups": [
 		{
@@ -29,17 +41,5 @@
 			"Name": "LipSync",
 			"Ids": []
 		}
-	],
-	"Motions": {
-		"Tap": [
-			{
-				"File": "摸摸头.motion3.json"
-			}
-		],
-		"Idle": [
-			{
-				"File": "待机动画.motion3.json"
-			}
-		]
-	}
+	]
 }

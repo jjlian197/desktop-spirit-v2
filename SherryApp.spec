@@ -22,8 +22,6 @@ a = Analysis(
     ],
     datas=[
         ('src/assets/models', 'src/assets/models'),  # 保持目录结构
-        ('src/assets/sounds', 'src/assets/sounds'),
-        ('src/assets/styles', 'src/assets/styles'),
         ('config.yaml', '.'),
         # Live2D 着色器文件（必须！）
         (live2d_shaders, 'live2d/v3/FrameworkShaders'),

@@ -67,6 +67,10 @@ class SpriteBrain:
             "offset_eye_y": 0.0,        # 眼球上下偏移补偿
         }
         
+        # 🚨 鼠标跟随暂停状态
+        self._mouse_follow_paused = False
+        self._pause_reason = None  # 暂停原因: "motion", "tts", "manual"
+        
         # 当前参数值 (平滑后的实际值)
         self.current_params = {
             # 头部旋转
@@ -226,7 +230,16 @@ class SpriteBrain:
             logger.debug(f"🗣️ TTS 已关闭，跳过语音: {text[:20]}...")
             return True  # 返回成功，但不实际播放
         
-        return await self.send_command("speak", {"text": text})
+        # 🚨 TTS 时暂停鼠标跟随并回正
+        self._pause_mouse_follow("tts")
+        await self._reset_to_center()
+        
+        result = await self.send_command("speak", {"text": text})
+        
+        # 🚨 TTS 结束后恢复鼠标跟随
+        self._resume_mouse_follow("tts")
+        
+        return result
 
     async def trigger_motion(self, group: str, interactive: bool = True):
         """
@@ -237,7 +250,83 @@ class SpriteBrain:
         """
         if interactive:
             self.reset_idle_timer("motion")  # 🚨 用户交互，重置空闲计时
-        return await self.send_command("motion", {"group": group})
+        
+        # 🚨 非 Idle 动作播放时暂停鼠标跟随
+        is_idle = group.lower() == "idle"
+        if not is_idle:
+            self._pause_mouse_follow("motion")
+        
+        result = await self.send_command("motion", {"group": group})
+        
+        # 🚨 非 Idle 动作结束后恢复鼠标跟随（通过异步任务延迟恢复）
+        if not is_idle:
+            asyncio.create_task(self._resume_mouse_follow_after_motion())
+        
+        return result
+    
+    def _pause_mouse_follow(self, reason: str):
+        """暂停鼠标跟随"""
+        self._mouse_follow_paused = True
+        self._pause_reason = reason
+        logger.info(f"🖱️ Mouse follow paused ({reason})")
+    
+    def _resume_mouse_follow(self, reason: str):
+        """恢复鼠标跟随"""
+        if self._pause_reason == reason:
+            self._mouse_follow_paused = False
+            self._pause_reason = None
+            logger.info(f"🖱️ Mouse follow resumed ({reason})")
+    
+    async def _resume_mouse_follow_after_motion(self, delay: float = 3.0):
+        """动作播放完成后延迟恢复鼠标跟随"""
+        await asyncio.sleep(delay)
+        self._resume_mouse_follow("motion")
+    
+    async def _reset_to_center(self):
+        """发送回正参数（回到修正后的中心位置，而非纯0）"""
+        cfg = self.mouse_config
+        center_params = {
+            # 头部旋转 - 使用偏移补偿值
+            "ParamAngleX": cfg.get("offset_angle_x", 0.0),   # 头部左右偏移补偿
+            "ParamAngleY": cfg.get("offset_angle_y", 0.0),   # 头部上下偏移补偿
+            "ParamAngleZ": cfg.get("offset_angle_z", 0.0),   # 头部倾斜偏移补偿
+            # 身体旋转 - 使用偏移补偿值
+            "ParamBodyAngleX": cfg.get("offset_body_x", 0.0),  # 身体左右偏移补偿
+            "ParamBodyAngleY": 0.0,  # 身体前后倾斜无偏移
+            "ParamBodyAngleZ": 0.0,  # 身体侧倾无偏移
+            # 眼神 - 使用偏移补偿值
+            "ParamEyeBallX": cfg.get("offset_eye_x", 0.0),   # 眼球左右偏移补偿
+            "ParamEyeBallY": cfg.get("offset_eye_y", 0.0),   # 眼球上下偏移补偿
+        }
+        await self.send_command("parameter_batch", {"params": center_params})
+        logger.info(f"🎯 Reset to center with offsets: X={cfg.get('offset_angle_x', 0.0)}, Y={cfg.get('offset_angle_y', 0.0)}")
+    
+    # 🚨 手动控制鼠标跟随开关（供右键菜单使用）
+    def toggle_mouse_follow(self, enabled: bool = None):
+        """
+        切换鼠标跟随开关
+        Args:
+            enabled: 如果为 None，则切换当前状态；否则设置为指定状态
+        Returns:
+            当前状态
+        """
+        if enabled is None:
+            self.mouse_config["enabled"] = not self.mouse_config["enabled"]
+        else:
+            self.mouse_config["enabled"] = enabled
+        
+        status = "enabled" if self.mouse_config["enabled"] else "disabled"
+        logger.info(f"🖱️ Mouse follow manually {status}")
+        
+        # 如果禁用，发送回正参数
+        if not self.mouse_config["enabled"]:
+            asyncio.create_task(self._reset_to_center())
+        
+        return self.mouse_config["enabled"]
+    
+    def is_mouse_follow_enabled(self) -> bool:
+        """获取鼠标跟随状态"""
+        return self.mouse_config["enabled"]
     
     async def set_expression(self, expression_name: str, interactive: bool = True):
         """
@@ -526,6 +615,11 @@ class SpriteBrain:
                 await asyncio.sleep(1)
                 continue
             
+            # 🚨 检查是否暂停鼠标跟随（动作播放或 TTS 时）
+            if self._mouse_follow_paused:
+                await asyncio.sleep(0.1)
+                continue
+            
             mx, my = self.get_mouse_position()
             
             # === 死区处理 ===
@@ -748,6 +842,19 @@ class SpriteBrain:
     async def _handle_http_health(self, request):
         """健康检查端点"""
         idle_time = time.time() - self.last_interaction_time if hasattr(self, 'last_interaction_time') else 0
+        
+        # 🚨 获取鼠标跟随偏移值
+        mouse_offsets = {}
+        if hasattr(self, 'mouse_config'):
+            mouse_offsets = {
+                "mouse_offset_angle_x": self.mouse_config.get("offset_angle_x", 25.0),
+                "mouse_offset_angle_y": self.mouse_config.get("offset_angle_y", -30.0),
+                "mouse_offset_angle_z": self.mouse_config.get("offset_angle_z", -30.0),
+                "mouse_offset_body_x": self.mouse_config.get("offset_body_x", 15.0),
+                "mouse_offset_eye_x": self.mouse_config.get("offset_eye_x", 0.5),
+                "mouse_offset_eye_y": self.mouse_config.get("offset_eye_y", 0.0),
+            }
+        
         return web.json_response({
             "status": "ok",
             "websocket_connected": self.ws is not None,
@@ -755,9 +862,40 @@ class SpriteBrain:
             "affection": self.mood.affection_level if hasattr(self, 'mood') else 0,
             "is_idle": getattr(self, 'is_idle', False),
             "tts_enabled": getattr(self.tts_config, 'enabled', True) if hasattr(self, 'tts_config') else True,
+            "mouse_follow_enabled": self.mouse_config.get("enabled", True) if hasattr(self, 'mouse_config') else True,
             "idle_time": round(idle_time, 1),
-            "idle_timeout": getattr(self.idle_config, 'idle_timeout', 30) if hasattr(self, 'idle_config') else 30
+            "idle_timeout": getattr(self.idle_config, 'idle_timeout', 30) if hasattr(self, 'idle_config') else 30,
+            **mouse_offsets  # 展开偏移值
         })
+    
+    async def _handle_http_mouse_follow(self, request):
+        """鼠标跟随控制端点"""
+        try:
+            data = await request.json()
+            action = data.get("action", "toggle")  # toggle, on, off, status
+            
+            if action == "toggle":
+                enabled = self.toggle_mouse_follow()
+            elif action == "on":
+                enabled = self.toggle_mouse_follow(True)
+            elif action == "off":
+                enabled = self.toggle_mouse_follow(False)
+            elif action == "status":
+                enabled = self.is_mouse_follow_enabled()
+            else:
+                return web.json_response({
+                    "success": False, 
+                    "error": f"Unknown action: {action}. Use: toggle, on, off, status"
+                }, status=400)
+            
+            return web.json_response({
+                "success": True,
+                "mouse_follow_enabled": enabled,
+                "action": action
+            })
+        except Exception as e:
+            logger.error(f"Mouse follow API 错误: {e}")
+            return web.json_response({"success": False, "error": str(e)}, status=500)
     
     async def _start_http_server(self):
         """启动 HTTP API 服务器"""
@@ -765,6 +903,7 @@ class SpriteBrain:
         app.router.add_post("/api/command", self._handle_http_command)
         app.router.add_get("/health", self._handle_http_health)
         app.router.add_post("/api/tts", self._handle_http_tts)  # 🚨 TTS 控制端点
+        app.router.add_post("/api/mouse_follow", self._handle_http_mouse_follow)  # 🚨 鼠标跟随控制端点
         
         self.http_runner = web.AppRunner(app)
         await self.http_runner.setup()
@@ -773,9 +912,10 @@ class SpriteBrain:
         await self.http_site.start()
         
         logger.info(f"🌐 HTTP API 服务器已启动: http://127.0.0.1:{self.http_port}")
-        logger.info(f"   - POST /api/command  - 发送 WebSocket 命令")
-        logger.info(f"   - POST /api/tts      - TTS 开关控制")
-        logger.info(f"   - GET  /health       - 健康检查")
+        logger.info(f"   - POST /api/command      - 发送 WebSocket 命令")
+        logger.info(f"   - POST /api/tts          - TTS 开关控制")
+        logger.info(f"   - POST /api/mouse_follow - 鼠标跟随控制")
+        logger.info(f"   - GET  /health           - 健康检查")
     
     async def _stop_http_server(self):
         """停止 HTTP API 服务器"""

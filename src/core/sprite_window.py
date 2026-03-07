@@ -352,6 +352,16 @@ class SherrySpriteWindow(QMainWindow):
         bg_menu.addAction(purple_bg)
 
         menu.addSeparator()
+        
+        # 🖱️ 鼠标跟随开关
+        mouse_follow_action = QAction("🖱️ 鼠标跟随 (Mouse Follow)", self)
+        mouse_follow_action.setCheckable(True)
+        mouse_follow_enabled = self._get_mouse_follow_state()
+        mouse_follow_action.setChecked(mouse_follow_enabled)
+        mouse_follow_action.triggered.connect(self._toggle_mouse_follow)
+        menu.addAction(mouse_follow_action)
+        
+        menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(QApplication.quit)
         menu.addAction(quit_action)
@@ -537,4 +547,60 @@ class SherrySpriteWindow(QMainWindow):
         # Use QTimer to avoid blocking UI
         QTimer.singleShot(0, send_tts_request)
 
+    def _get_mouse_follow_state(self) -> bool:
+        """Get current mouse follow state from backend"""
+        try:
+            import urllib.request
+            import urllib.error
+            import json
             
+            req = urllib.request.Request(
+                "http://127.0.0.1:8766/health",
+                method='GET'
+            )
+            
+            with urllib.request.urlopen(req, timeout=1) as response:
+                if response.status == 200:
+                    result = json.loads(response.read().decode('utf-8'))
+                    return result.get('mouse_follow_enabled', True)
+        except Exception as e:
+            logger.debug(f"Failed to get mouse follow state: {e}")
+        
+        # Default to enabled if backend not available
+        return True
+
+    def _toggle_mouse_follow(self, checked: bool):
+        """Toggle mouse follow switch via HTTP API"""
+        from PyQt6.QtCore import QTimer
+        
+        def send_mouse_follow_request():
+            try:
+                import urllib.request
+                import urllib.error
+                import json
+                
+                action = "on" if checked else "off"
+                data = json.dumps({"action": action}).encode('utf-8')
+                
+                req = urllib.request.Request(
+                    "http://127.0.0.1:8766/api/mouse_follow",
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                
+                with urllib.request.urlopen(req, timeout=2) as response:
+                    if response.status == 200:
+                        self.show_message(f"🖱️ 鼠标跟随: {'开启' if checked else '关闭'}")
+                    else:
+                        self.show_message(f"⚠️ 鼠标跟随状态已切换 (HTTP {response.status})")
+                        
+            except urllib.error.URLError as e:
+                logger.error(f"Mouse follow HTTP request failed: {e}")
+                self.show_message(f"⚠️ 鼠标跟随状态已切换 (后端未响应)")
+            except Exception as e:
+                logger.error(f"Mouse follow toggle error: {e}")
+                self.show_message(f"⚠️ 鼠标跟随状态已切换")
+        
+        # Use QTimer to avoid blocking UI
+        QTimer.singleShot(0, send_mouse_follow_request)
