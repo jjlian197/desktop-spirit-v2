@@ -1,62 +1,29 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-PyInstaller spec file for Sherry Desktop Sprite
-图标使用花丸.png
-"""
+from PyInstaller.utils.hooks import collect_all
 
-import sys
-from pathlib import Path
+datas = [('C:\\Users\\lianj\\Python\\desktop-spirit-v2-windows\\src\\assets', 'src/assets'), ('C:\\Users\\lianj\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\live2d\\v3\\FrameworkShaders', 'live2d/v3/FrameworkShaders')]
+binaries = [('C:\\Windows\\System32\\msvcp140.dll', '.'), ('C:\\Windows\\System32\\vcruntime140.dll', '.'), ('C:\\Windows\\System32\\vcruntime140_1.dll', '.')]
+hiddenimports = ['PyQt6.sip', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtOpenGL', 'PyQt6.QtOpenGLWidgets', 'live2d.v3', 'live2d', 'edge_tts', 'pydub', 'pygame', 'aiohttp', 'websockets', 'websockets.legacy', 'psutil', 'loguru', 'PIL', 'yaml']
+tmp_ret = collect_all('live2d')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('PyQt6')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# 项目路径
-project_dir = Path(SPECFILE).parent
-src_dir = project_dir / "src"
-assets_dir = src_dir / "assets"
-
-# 图标路径（使用花丸图标）
-icon_path = assets_dir / "hanamaru_icon.ico"
-if not icon_path.exists():
-    icon_path = assets_dir / "icon.ico"
-
-block_cipher = None
 
 a = Analysis(
-    [str(src_dir / 'main.py')],
-    pathex=[str(project_dir)],
-    binaries=[],
-    datas=[
-        (str(assets_dir), 'src/assets'),
-    ],
-    hiddenimports=[
-        'PyQt6.sip',
-        'PyQt6.QtCore',
-        'PyQt6.QtGui',
-        'PyQt6.QtWidgets',
-        'PyQt6.QtOpenGL',
-        'PyQt6.QtOpenGLWidgets',
-        'live2d.v3',
-        'live2d',
-        'edge_tts',
-        'pydub',
-        'pygame',
-        'aiohttp',
-        'websockets',
-        'websockets.legacy',
-        'psutil',
-        'loguru',
-        'PIL',
-        'yaml',
-    ],
+    ['C:\\Users\\lianj\\Python\\desktop-spirit-v2-windows\\src\\main.py'],
+    pathex=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
+    optimize=0,
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -70,16 +37,15 @@ exe = EXE(
     upx=True,
     console=False,
     disable_windowed_traceback=False,
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(icon_path),
+    icon=['C:\\Users\\lianj\\Python\\desktop-spirit-v2-windows\\src\\assets\\hanamaru_icon.ico'],
 )
-
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
     upx=True,

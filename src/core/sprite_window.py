@@ -8,11 +8,11 @@ import platform
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout,
+    QMainWindow, QWidget, QFrame, QVBoxLayout, QStackedLayout,
     QApplication, QSystemTrayIcon, QMenu
 )
-from PyQt6.QtCore import Qt, QPoint, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QIcon, QAction, QFont
+from PyQt6.QtCore import Qt, QPoint, QRectF, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QIcon, QAction, QFont, QPainter, QPainterPath, QLinearGradient, QColor, QPixmap
 from loguru import logger
 
 from src.ui.bubble_widget import BubbleWidget
@@ -50,6 +50,65 @@ if platform.system() == 'Darwin':
         pass
 
 
+class BackgroundFrame(QFrame):
+    """Custom-painted background frame to avoid QSS/GL composition issues."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._bg_type = "transparent"
+        self._image_path = None
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAutoFillBackground(False)
+
+    def set_background(self, bg_type: str):
+        self._bg_type = bg_type
+        self._image_path = None
+        if bg_type.startswith("image:"):
+            p = Path(bg_type[6:]).expanduser().resolve()
+            if p.exists():
+                self._image_path = str(p)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        rect = self.rect()
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(rect.adjusted(0, 0, -1, -1)), 20, 20)
+        painter.setClipPath(path)
+
+        if self._bg_type == "transparent":
+            return
+
+        if self._bg_type == "purple":
+            grad = QLinearGradient(0, 0, rect.width(), rect.height())
+            grad.setColorAt(0.0, QColor("#667eea"))
+            grad.setColorAt(1.0, QColor("#764ba2"))
+            painter.fillRect(rect, grad)
+            return
+
+        if self._image_path:
+            pix = QPixmap(self._image_path)
+            if not pix.isNull():
+                scaled = pix.scaled(
+                    rect.size(),
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(rect.topLeft(), scaled)
+                return
+
+        color = QColor(self._bg_type)
+        if color.isValid():
+            painter.fillRect(rect, color)
+
+
 class SherrySpriteWindow(QMainWindow):
     """Main window for Sherry Desktop Sprite"""
 
@@ -69,6 +128,7 @@ class SherrySpriteWindow(QMainWindow):
         self.is_click_through = False
         self.is_big_head = False
         self._watermark_enabled = False
+        self._current_background = "transparent"
 
         # Initialize TTS manager
         self.tts_manager = None
@@ -98,7 +158,8 @@ class SherrySpriteWindow(QMainWindow):
             Qt.WindowType.Window |
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowDoesNotAcceptFocus
+            Qt.WindowType.WindowDoesNotAcceptFocus |
+            Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(400, 600)
@@ -111,21 +172,22 @@ class SherrySpriteWindow(QMainWindow):
         else:
             logger.warning(f"[ICON] Window icon not found: {icon_path}")
        
-        self.setStyleSheet("SherrySpriteWindow { background: transparent; }")
-        
+        # Keep top-level window undecorated/translucent; background is painted by central_widget.
+
     def _setup_ui(self):
         # 创建主容器
-        self.central_widget = QWidget()
+        self.central_widget = QFrame()
+        self.central_widget.setFrameShape(QFrame.Shape.NoFrame)
+        self.central_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.central_widget.setObjectName("centralWidget")
+        self.central_widget.setStyleSheet("background: transparent;")
         self.setCentralWidget(self.central_widget)
         
-        # 使用绝对定位布局
-        from PyQt6.QtWidgets import QVBoxLayout
-        layout = QVBoxLayout(self.central_widget)
+        layout = QStackedLayout(self.central_widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        
-        # 创建 Live2D 视图
+        layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+
+        # 🚨 【关键】创建 Live2D 视图（必须在背景之前创建，以便背景可以设为它的 sibling）
         self.live2d_view = None
         logger.info(f"🔍 HAS_LIVE2D = {HAS_LIVE2D}")
         if HAS_LIVE2D:
@@ -167,6 +229,18 @@ class SherrySpriteWindow(QMainWindow):
                 logger.error(traceback.format_exc())
         else:
             logger.error("❌ HAS_LIVE2D is False, skipping Live2D initialization")
+        
+        # 创建背景层 - 与 Live2DView 同级
+        self.background_frame = BackgroundFrame(self.central_widget)
+        self.background_frame.setGeometry(self.central_widget.rect())
+        layout.addWidget(self.background_frame)
+        
+        # 🚨 【关键】如果有 Live2D，让背景位于 OpenGL 视图之下
+        if self.live2d_view:
+            self.background_frame.stackUnder(self.live2d_view)
+            # 🚨 【关键】设置 OpenGL 视图始终在最上层绘制，但保持透明
+            self.live2d_view.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, False)
+            logger.info("✅ Background stacked under Live2DView")
 
         self.bubble_widget = BubbleWidget(self)
         self.bubble_widget.hide()
@@ -221,7 +295,51 @@ class SherrySpriteWindow(QMainWindow):
     @pyqtSlot(str)
     def set_background(self, bg_type: str):
         """设置窗口背景 - 支持纯色、渐变、透明和本地图片路径"""
-        logger.info(f"Background change requested: {bg_type} (not implemented)")
+        if not self.central_widget:
+            logger.warning("set_background skipped: central_widget is not ready")
+            return
+        if bg_type.startswith("image:"):
+            abs_path = Path(bg_type[6:]).expanduser().resolve()
+            if not abs_path.exists():
+                logger.error(f"Background image not found: {abs_path}")
+                self.show_message(f"Image not found: {abs_path.name}")
+                return
+
+        if hasattr(self, "background_frame") and self.background_frame:
+            self.background_frame.set_background(bg_type)
+            self.background_frame.update()
+            logger.info(f"Background frame active: size={self.background_frame.size()}")
+        self._current_background = bg_type
+        self.central_widget.update()
+        logger.info(f"Background paint mode applied: {bg_type}")
+
+        # 🚨 【关键】同时设置 Live2DView 的背景，因为 QOpenGLWidget 会覆盖 QWidget 的绘制
+        if self.live2d_view:
+            if bg_type == "transparent":
+                self.live2d_view.set_background_color(None)
+            elif bg_type == "purple":
+                # 🎨 好看的紫色渐变: #667eea (102, 126, 234) -> #764ba2 (118, 75, 162)
+                self.live2d_view.set_gradient_background((102, 126, 234), (118, 75, 162), "diagonal")
+            elif bg_type.startswith("image:"):
+                # 🎨 图片背景 - 直接在 Live2DView 中绘制
+                image_path = bg_type[6:]
+                self.live2d_view.set_background_image(image_path)
+            else:
+                # 纯色背景
+                from PyQt6.QtGui import QColor
+                color = QColor(bg_type)
+                if color.isValid():
+                    self.live2d_view.set_background_color((color.red(), color.green(), color.blue(), 255))
+                else:
+                    self.live2d_view.set_background_color(None)
+            self.live2d_view.update()
+
+        # 🚨 【关键修复】确保 Live2D 视图在最上层，防止背景覆盖模型
+        if self.live2d_view:
+            self.live2d_view.raise_()
+            logger.debug("Live2D view raised to top")
+
+        logger.info(f"Background updated: {self._current_background}")
             
     def toggle_big_head_mode(self):
         self.is_big_head = not self.is_big_head
@@ -286,6 +404,38 @@ class SherrySpriteWindow(QMainWindow):
         eye_action.setChecked(eye_tracking_enabled)
         eye_action.triggered.connect(self._toggle_eye_tracking)
         menu.addAction(eye_action)
+
+        bg_menu = menu.addMenu("Background")
+        bg_transparent_action = QAction("Transparent", self)
+        bg_transparent_action.setCheckable(True)
+        bg_transparent_action.setChecked(self._current_background == "transparent")
+        bg_transparent_action.triggered.connect(lambda checked=False: self.set_background("transparent"))
+        bg_menu.addAction(bg_transparent_action)
+
+        bg_purple_action = QAction("Purple Gradient", self)
+        bg_purple_action.setCheckable(True)
+        bg_purple_action.setChecked(self._current_background == "purple")
+        bg_purple_action.triggered.connect(lambda checked=False: self.set_background("purple"))
+        bg_menu.addAction(bg_purple_action)
+
+        bg_menu.addSeparator()
+        for label, color in [
+            ("White", "white"),
+            ("Black", "black"),
+            ("Light Gray", "#f5f5f5"),
+            ("Light Blue", "#e3f2fd"),
+            ("Light Pink", "#fce4ec"),
+        ]:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(self._current_background == color)
+            action.triggered.connect(lambda checked=False, c=color: self.set_background(c))
+            bg_menu.addAction(action)
+
+        bg_menu.addSeparator()
+        bg_image_action = QAction("Choose Image...", self)
+        bg_image_action.triggered.connect(self._select_background_image)
+        bg_menu.addAction(bg_image_action)
 
         menu.addSeparator()
 
@@ -576,6 +726,21 @@ class SherrySpriteWindow(QMainWindow):
             self.live2d_view.set_eye_tracking_enabled(not current)
             new_state = not current
             self.show_message(f"👁️ 视线跟随: {'开启' if new_state else '关闭'}")
+
+    def _select_background_image(self):
+        """Open dialog to select a background image."""
+        from PyQt6.QtWidgets import QFileDialog
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Background Image",
+            str(Path.home()),
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)"
+        )
+
+        if file_path:
+            self.set_background(f"image:{file_path}")
+            self.show_message("Background image updated")
 
     def closeEvent(self, event):
         """窗口关闭事件 - 清理资源"""

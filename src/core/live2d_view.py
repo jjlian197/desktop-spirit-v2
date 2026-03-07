@@ -12,7 +12,7 @@ Uses live2d-py for Python bindings to Live2D Cubism SDK
 import os
 import platform
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 # Check if running on Apple Silicon
 IS_APPLE_SILICON = platform.machine() == 'arm64' and platform.system() == 'Darwin'
@@ -118,6 +118,9 @@ class Live2DView(QOpenGLWidget):
         fmt = QSurfaceFormat()
         fmt.setAlphaBufferSize(8)
         self.setFormat(fmt)
+        # 🚨 设置 OpenGL 部件的更新行为，确保正确处理透明背景
+        self.setUpdateBehavior(QOpenGLWidget.UpdateBehavior.NoPartialUpdate)
+        logger.info(f"Live2DView: OpenGL format alpha buffer size = {fmt.alphaBufferSize()}, UpdateBehavior=NoPartialUpdate")
 
 
 # 在 __init__ 中添加：
@@ -128,6 +131,10 @@ class Live2DView(QOpenGLWidget):
 # 🚨 【关键修复 2】：告诉 Qt 这个 OpenGL 组件允许背景透明
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        # 🚨 禁止自动填充背景，避免遮挡 central_widget
+        self.setAutoFillBackground(False)
+        logger.info("Live2DView: 设置 WA_TranslucentBackground=True, WA_OpaquePaintEvent=False, WA_NoSystemBackground=True, AutoFillBackground=False")
 
         self.model_path = model_path
         self.model = None
@@ -162,6 +169,12 @@ class Live2DView(QOpenGLWidget):
         # Big head mode
         self.is_big_head = False
         self.big_head_y_offset = -1.2  # 调整为对齐头部
+        
+        # 🎨 背景透明控制和背景颜色/渐变/图片
+        self._transparent_background = True
+        self._background_color = None  # None 表示透明，否则是 (r, g, b, a) 元组
+        self._background_gradient = None  # None 或 ((r1,g1,b1), (r2,g2,b2), direction)
+        self._background_image = None  # None 或 QPixmap
 
         # Mouse tracking
         self.setMouseTracking(True)
@@ -524,14 +537,89 @@ class Live2DView(QOpenGLWidget):
 
     def paintGL(self):
         if not self.model or not HAS_LIVE2D:
+            logger.debug("paintGL: 模型未加载或 Live2D 不可用")
             return
 
         try:
             self.makeCurrent()
-
-# 🚨 【关键修复 3】：用完全透明的颜色 (RGBA 都是 0) 清空上一帧的画面
-            if hasattr(live2d, 'clearBuffer'):
-                live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
+            
+            from PyQt6.QtGui import QPainter, QPainterPath
+            from PyQt6.QtCore import QRectF
+            
+            # 🚨 【关键】绘制背景（带20px圆角）
+            if self._background_image and not self._background_image.isNull():
+                # 图片背景
+                painter = QPainter(self)
+                rect = self.rect()
+                
+                # 创建圆角裁剪路径
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(rect.adjusted(0, 0, -1, -1)), 20, 20)
+                painter.setClipPath(path)
+                
+                # 缩放图片填充整个区域
+                scaled = self._background_image.scaled(
+                    rect.size(),
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(rect.topLeft(), scaled)
+                painter.end()
+                logger.debug("paintGL: 已绘制圆角图片背景")
+            
+            elif self._background_gradient:
+                # 渐变背景
+                from PyQt6.QtGui import QLinearGradient, QColor
+                
+                painter = QPainter(self)
+                (r1, g1, b1), (r2, g2, b2), direction = self._background_gradient
+                
+                # 创建圆角裁剪路径
+                rect = self.rect()
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(rect.adjusted(0, 0, -1, -1)), 20, 20)
+                painter.setClipPath(path)
+                
+                # 创建渐变
+                if direction == "diagonal":
+                    grad = QLinearGradient(0, 0, rect.width(), rect.height())
+                else:
+                    grad = QLinearGradient(0, 0, 0, rect.height())
+                    
+                grad.setColorAt(0.0, QColor(r1, g1, b1))
+                grad.setColorAt(1.0, QColor(r2, g2, b2))
+                
+                painter.fillRect(rect, grad)
+                painter.end()
+                
+                logger.debug(f"paintGL: 已绘制圆角渐变背景")
+            
+            # 🚨 【关键】如果有纯色背景，用 OpenGL 清除
+            elif self._background_color:
+                # 纯色背景也先用 QPainter 绘制圆角矩形
+                from PyQt6.QtGui import QColor
+                painter = QPainter(self)
+                rect = self.rect()
+                
+                # 创建圆角裁剪路径
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(rect.adjusted(0, 0, -1, -1)), 20, 20)
+                painter.setClipPath(path)
+                
+                # 先填充透明（清除之前的背景）
+                painter.fillRect(rect, QColor(0, 0, 0, 0))
+                
+                # 填充背景色
+                r, g, b, a = self._background_color
+                painter.fillRect(rect, QColor(r, g, b, a))
+                painter.end()
+                
+                logger.debug(f"paintGL: 已绘制圆角纯色背景 ({r},{g},{b},{a})")
+            else:
+                # 透明清屏
+                if hasattr(live2d, 'clearBuffer'):
+                    live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
+                    logger.debug("paintGL: OpenGL 清除为透明")
   
 # 🚨 【关键插入点】：必须在 model.Update() 之前设置嘴型参数！
             if getattr(self, '_lip_sync_enabled', False):
@@ -837,6 +925,48 @@ class Live2DView(QOpenGLWidget):
             self.mouse_x = 0.0
             self.mouse_y = 0.0
         logger.info(f"👁️ Eye tracking {'enabled' if enabled else 'disabled'}")
+    
+    def set_transparent_background(self, transparent: bool, clear_color: Optional[Tuple[float, float, float, float]] = None):
+        """🎨 设置背景透明状态（OpenGL 层保持透明以显示父层背景）"""
+        self._transparent_background = transparent
+        self._background_color = clear_color
+        self._background_gradient = None
+        self._background_image = None
+        logger.info(f"🎨 set_transparent_background: transparent={transparent}, color={clear_color}")
+        self.update()
+        logger.info(f"🎨 Live2DView update() 已调用")
+    
+    def set_background_color(self, color: Optional[Tuple[int, int, int, int]]):
+        """🎨 设置背景颜色 (RGBA, 0-255)，None 表示透明"""
+        self._background_color = color
+        self._background_gradient = None
+        self._background_image = None
+        self._transparent_background = (color is None)
+        logger.info(f"🎨 Live2DView background color set: {color}")
+        self.update()
+    
+    def set_gradient_background(self, color1: Tuple[int, int, int], color2: Tuple[int, int, int], direction: str = "diagonal"):
+        """🎨 设置渐变背景，direction: 'diagonal'(对角线) 或 'vertical'(垂直)"""
+        self._background_gradient = (color1, color2, direction)
+        self._background_color = None
+        self._background_image = None
+        self._transparent_background = False
+        logger.info(f"🎨 Live2DView gradient set: {color1} -> {color2}, direction={direction}")
+        self.update()
+    
+    def set_background_image(self, image_path: str):
+        """🎨 设置图片背景"""
+        from PyQt6.QtGui import QPixmap
+        self._background_image = QPixmap(image_path)
+        if self._background_image.isNull():
+            logger.error(f"Failed to load background image: {image_path}")
+            self._background_image = None
+        else:
+            self._background_gradient = None
+            self._background_color = None
+            self._transparent_background = False
+            logger.info(f"🎨 Live2DView background image set: {image_path}")
+        self.update()
 
     def reset_pose(self, duration_ms: float = 3000):
         """
