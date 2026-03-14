@@ -25,5 +25,34 @@ watchdog>=3.0.0
 # Logging
 loguru>=0.7.0
 
+# Translation (for Japanese mode)
+# 百度翻译 (推荐 - 国内最稳定, 需要 BAIDU_APP_ID 和 BAIDU_APP_KEY)
+# 申请地址: https://fanyi-api.baidu.com/
+# 
+# Google Translate (备用 - 免费, 无需配置)
+googletrans>=4.0.0
+# 
+# DeepL API (备用 - 高质量, 需要 DEEPL_API_KEY)
+# deepl>=1.15.0
+
+# TTS - GPT-SoVITS (可选 - 高质量语音克隆)
+# 需要自建 GPT-SoVITS API 服务
+# 项目地址: https://github.com/RVC-Boss/GPT-SoVITS
+# 
+# 本地部署配置:
+#   GPT_SOVITS_URL=http://127.0.0.1:9880
+#
+# 远程部署 + SSH 隧道配置:
+#   方式1: 使用 SSH Config 别名（推荐，~/.ssh/config 已配置好）
+#     SSH_TUNNEL_HOST=pc
+#     GPT_SOVITS_URL=http://127.0.0.1:9880
+#   
+#   方式2: 完整配置
+#     SSH_TUNNEL_HOST=your.server.com
+#     SSH_TUNNEL_USER=your_username
+#     SSH_TUNNEL_KEY=/path/to/private_key  (可选)
+#     GPT_SOVITS_URL=http://127.0.0.1:9880
+#paramiko>=3.0.0  # SSH 隧道支持（连接远程 GPT-SoVITS 需要）
+
 # macOS Native Window Level Support (optional, for advanced always-on-top)
 pyobjc>=9.0; sys_platform == 'darwin'

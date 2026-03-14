@@ -6,6 +6,7 @@ Sherry Sprite Window - Transparent, Frameless, Always-on-Top
 import sys
 import os
 import platform
+import subprocess
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -87,6 +88,7 @@ class SherrySpriteWindow(QMainWindow):
             Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         
         self.setFixedSize(400, 600)
        
@@ -313,12 +315,30 @@ class SherrySpriteWindow(QMainWindow):
 
         tts_menu.addSeparator()
 
+        # 🌐 Language selection submenu
+        language_menu = tts_menu.addMenu("🌐 语言 (Language)")
+        if HAS_TTS and self.tts_manager:
+            languages = self.tts_manager.get_available_languages()
+            current_lang = self.tts_manager.get_current_language()
+            for lang_code, lang_name in languages.items():
+                action = QAction(f"{lang_name} ({lang_code.upper()})", self)
+                action.setCheckable(True)
+                action.setChecked(current_lang == lang_code)
+                action.triggered.connect(lambda checked, l=lang_code: self._switch_language(l))
+                language_menu.addAction(action)
+        else:
+            no_lang_action = QAction("语言切换不可用", self)
+            no_lang_action.setEnabled(False)
+            language_menu.addAction(no_lang_action)
+
+        tts_menu.addSeparator()
+
         # Test phrases
         test_phrases = [
             ("你好，世界！", "你好，世界！我是雪莉~"),
             ("测试语音", "这是一个语音测试，你能听到我说话吗？"),
             ("长句测试", "今天天气真不错，适合出去散步和喝咖啡呢！"),
-            ("英文测试", "Hello, this is a test of the TTS system."),
+            ("日文测试", "こんにちは、シェリーです~"),
         ]
 
         for label, text in test_phrases:
@@ -362,6 +382,13 @@ class SherrySpriteWindow(QMainWindow):
         menu.addAction(mouse_follow_action)
         
         menu.addSeparator()
+        
+        # 🏠 回家模式
+        home_mode_action = QAction("🏠 启动回家模式", self)
+        home_mode_action.triggered.connect(self._launch_home_mode)
+        menu.addAction(home_mode_action)
+        
+        menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(QApplication.quit)
         menu.addAction(quit_action)
@@ -372,6 +399,27 @@ class SherrySpriteWindow(QMainWindow):
         self._watermark_enabled = not self._watermark_enabled
         val = -1.0 if self._watermark_enabled else 0.0
         self.set_parameter("Open_EyeMask4", val)
+    
+    def _launch_home_mode(self):
+        """🏠 启动回家模式 - 通过 openclaw 发送消息"""
+        try:
+            # 执行终端命令
+            cmd = ["openclaw", "agent", "--agent", "main", "--message", "我回来了"]
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True  # 避免子进程随父进程退出
+            )
+            logger.info("🏠 回家模式已启动: openclaw agent --agent main --message '我回来了'")
+            # 显示反馈气泡
+            self.show_message("已启动回家模式~", 2000)
+        except FileNotFoundError:
+            logger.error("❌ 未找到 openclaw 命令，请确保已安装并添加到 PATH")
+            self.show_message("错误：未找到 openclaw 命令", 3000)
+        except Exception as e:
+            logger.error(f"❌ 启动回家模式失败: {e}")
+            self.show_message(f"启动失败: {e}", 3000)
     
     def _auto_remove_watermark(self):
         """启动时自动去水印"""
@@ -454,6 +502,20 @@ class SherrySpriteWindow(QMainWindow):
                 self.show_message(f"🎙️ 已切换到: {provider_name.title()}")
             else:
                 self.show_message(f"❌ 切换失败: {provider_name}")
+
+    def _switch_language(self, lang_code: str):
+        """🌐 切换 TTS 语言 (zh/jp)"""
+        if not HAS_TTS or not self.tts_manager:
+            self.show_message("❌ TTS 不可用")
+            return
+        
+        success = self.tts_manager.set_language(lang_code)
+        if success:
+            lang_name = "中文" if lang_code == "zh" else "日语"
+            self.show_message(f"🌐 已切换到: {lang_name}")
+            logger.info(f"Language switched to: {lang_code} ({lang_name})")
+        else:
+            self.show_message(f"❌ 语言切换失败: {lang_code}")
 
     def _test_tts(self, text: str):
         """Test TTS with given text"""

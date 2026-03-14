@@ -15,6 +15,7 @@ Architecture:
 """
 
 import os
+import time
 import asyncio
 import tempfile
 import subprocess
@@ -502,6 +503,18 @@ class LocalTTSProvider(BaseTTSProvider):
 
 
 # =============================================================================
+# GPT-SoVITS Provider Import
+# =============================================================================
+
+try:
+    from src.core.gpt_sovits_provider import GPTSoVITSProvider, GPTSoVITSConfig
+    HAS_GPT_SOVITS = True
+except ImportError:
+    HAS_GPT_SOVITS = False
+    logger.warning("⚠️ GPT-SoVITS provider not found. Install dependencies or check module.")
+
+
+# =============================================================================
 # Audio Analysis
 # =============================================================================
 
@@ -588,6 +601,7 @@ class TTSManager(QObject):
         tts_error(error):       TTS error occurred
         lip_sync_frame(value):  Mouth open value (0.0-1.0)
         audio_amplitude(data):  Full amplitude array
+        language_changed(lang): Language changed (zh/jp)
     """
     
     # Signals
@@ -596,6 +610,21 @@ class TTSManager(QObject):
     tts_error = pyqtSignal(str)
     lip_sync_frame = pyqtSignal(float)
     audio_amplitude = pyqtSignal(list)
+    language_changed = pyqtSignal(str)
+    
+    # 🌐 支持的语言配置
+    LANGUAGE_VOICES = {
+        "zh": {
+            "name": "中文",
+            "edge_voice": "zh-CN-XiaoxiaoNeural",
+            "local_voice": "mei-jia",  # macOS 中文声音
+        },
+        "jp": {
+            "name": "日语",
+            "edge_voice": "ja-JP-NanamiNeural",
+            "local_voice": "kyoko",  # macOS 日语声音
+        },
+    }
     
     def __init__(self, parent=None, preferred_provider: str = "edge"):
         super().__init__(parent)
@@ -607,8 +636,28 @@ class TTSManager(QObject):
             "local": LocalTTSProvider(),
         }
         
+        # 🎙️ GPT-SoVITS 高质量语音合成（如果可用）
+        if HAS_GPT_SOVITS:
+            try:
+                self.providers["gptsovits"] = GPTSoVITSProvider()
+                logger.info("✅ TTSManager: GPT-SoVITS 已加载")
+            except Exception as e:
+                logger.warning(f"⚠️ TTSManager: GPT-SoVITS 加载失败: {e}")
+        
         self.current_provider = self._select_provider(preferred_provider)
         self.audio_analyzer = AudioAnalyzer(frame_rate=30)
+        
+        # 🌐 当前语言 (默认中文)
+        self._current_language = "zh"
+        
+        # 🌐 翻译器 (用于中日互译)
+        try:
+            from src.core.translator import get_translator
+            self._translator = get_translator()
+            logger.info("✅ TTSManager: 翻译器已加载")
+        except Exception as e:
+            logger.warning(f"⚠️ TTSManager: 翻译器加载失败: {e}")
+            self._translator = None
         
         # Playback state
         self._is_speaking = False
@@ -664,6 +713,62 @@ class TTSManager(QObject):
         return [name for name, p in self.providers.items() if p.is_available()]
     
     # -------------------------------------------------------------------------
+    # Language Management
+    # -------------------------------------------------------------------------
+    
+    def set_language(self, lang: str) -> bool:
+        """
+        设置 TTS 语言 (zh/jp)
+        
+        Args:
+            lang: "zh" 中文 或 "jp" 日语
+        
+        Returns:
+            是否设置成功
+        """
+        if lang not in self.LANGUAGE_VOICES:
+            logger.error(f"不支持的语言: {lang}")
+            return False
+        
+        lang_config = self.LANGUAGE_VOICES[lang]
+        
+        # 更新 EdgeTTS 的 voice
+        if "edge" in self.providers:
+            edge_provider = self.providers["edge"]
+            if hasattr(edge_provider, 'voice'):
+                edge_provider.voice = lang_config["edge_voice"]
+                logger.info(f"🌐 EdgeTTS 声音切换为: {lang_config['edge_voice']}")
+        
+        # 更新 LocalTTS 的 voice (macOS say)
+        if "local" in self.providers:
+            local_provider = self.providers["local"]
+            if hasattr(local_provider, 'MACOS_VOICES'):
+                local_provider.MACOS_VOICES["default"] = lang_config["local_voice"]
+                local_provider.MACOS_VOICES["zh_female"] = lang_config["local_voice"]
+                logger.info(f"🌐 LocalTTS 声音切换为: {lang_config['local_voice']}")
+        
+        # 🎙️ 更新 GPT-SoVITS 的语言配置
+        if "gptsovits" in self.providers:
+            gptsovits = self.providers["gptsovits"]
+            if hasattr(gptsovits, 'config') and hasattr(gptsovits.config, 'text_language'):
+                # jp -> ja, zh -> zh
+                gptsovits.config.text_language = "ja" if lang == "jp" else "zh"
+                logger.info(f"🎙️ GPT-SoVITS 语言切换为: {gptsovits.config.text_language}")
+        
+        self._current_language = lang
+        self.language_changed.emit(lang)
+        logger.info(f"🌐 TTS 语言已切换为: {lang_config['name']}")
+        return True
+    
+    def get_current_language(self) -> str:
+        """获取当前语言 (zh/jp)"""
+        return self._current_language
+    
+    def get_available_languages(self) -> Dict[str, str]:
+        """获取支持的语言列表 {code: name}"""
+        return {code: config["name"] for code, config in self.LANGUAGE_VOICES.items()}
+    
+    # -------------------------------------------------------------------------
     # Speech Synthesis
     # -------------------------------------------------------------------------
     
@@ -683,7 +788,16 @@ class TTSManager(QObject):
                 await asyncio.sleep(0.1)
         
         self._is_speaking = True
-        self.tts_started.emit(text)
+        
+        # 🌐 日语模式：自动翻译中文台词
+        original_text = text
+        if self._current_language == "jp" and self._translator:
+            translated = await self._translator.translate(text, target_lang="jp", source_lang="zh")
+            if translated != text:
+                logger.info(f"🌐 翻译: {text[:30]}... -> {translated[:30]}...")
+                text = translated
+        
+        self.tts_started.emit(original_text)  # 信号发射原文（显示用）
         
         try:
             # Primary provider

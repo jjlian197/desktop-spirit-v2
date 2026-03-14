@@ -24,13 +24,15 @@ class BubbleWidget(QWidget):
     def _setup_ui(self):
         """Setup UI components"""
         
-        # Frameless, transparent window
+        # Frameless, transparent window - 不获取焦点
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         
         # Layout
         layout = QVBoxLayout(self)
@@ -92,7 +94,6 @@ class BubbleWidget(QWidget):
             self.move(x, y)
         
         self.show()
-        self.raise_()
         
         # Auto-hide after duration
         if duration > 0:
