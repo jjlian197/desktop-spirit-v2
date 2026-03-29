@@ -333,6 +333,58 @@ class SherrySpriteWindow(QMainWindow):
 
         tts_menu.addSeparator()
 
+        # 🎙️ GPT-SoVITS 配置菜单
+        if HAS_TTS and self.tts_manager and "gptsovits" in self.tts_manager.providers:
+            gptsovits_menu = tts_menu.addMenu("🎙️ GPT-SoVITS 配置")
+            
+            # 显示当前参考音频文件名
+            gptsovits_provider = self.tts_manager.providers.get("gptsovits")
+            ref_path = ""
+            if gptsovits_provider and hasattr(gptsovits_provider, 'config'):
+                ref_path = gptsovits_provider.config.refer_wav_path or ""
+            ref_filename = ref_path.split("/")[-1].split("\\")[-1] if ref_path else "未设置"
+            
+            # 参考音频配置
+            ref_action = QAction(f"📁 参考音频: {ref_filename[:20]}...", self)
+            ref_action.triggered.connect(self._configure_gptsovits_ref)
+            gptsovits_menu.addAction(ref_action)
+            
+            # 参考文本配置
+            prompt_text = ""
+            if gptsovits_provider and hasattr(gptsovits_provider, 'config'):
+                prompt_text = gptsovits_provider.config.prompt_text or ""
+            prompt_display = prompt_text[:15] + "..." if prompt_text else "未设置"
+            prompt_action = QAction(f"📝 参考文本: {prompt_display}", self)
+            prompt_action.triggered.connect(self._configure_gptsovits_prompt)
+            gptsovits_menu.addAction(prompt_action)
+            
+            # 语速配置子菜单
+            speed_menu = gptsovits_menu.addMenu("⚡ 语速")
+            current_speed = 1.0
+            if gptsovits_provider and hasattr(gptsovits_provider, 'config'):
+                current_speed = gptsovits_provider.config.speed
+            
+            for speed_label, speed_value in [
+                ("0.8x 慢速", 0.8),
+                ("1.0x 正常", 1.0),
+                ("1.2x 稍快", 1.2),
+                ("1.5x 快速", 1.5),
+            ]:
+                action = QAction(speed_label, self)
+                action.setCheckable(True)
+                action.setChecked(abs(current_speed - speed_value) < 0.01)
+                action.triggered.connect(lambda checked, s=speed_value: self._configure_gptsovits_speed(s))
+                speed_menu.addAction(action)
+            
+            gptsovits_menu.addSeparator()
+            
+            # 恢复默认配置
+            reset_action = QAction("🔄 恢复默认 (Sakiko)", self)
+            reset_action.triggered.connect(self._reset_gptsovits_config)
+            gptsovits_menu.addAction(reset_action)
+            
+            tts_menu.addSeparator()
+
         # Test phrases
         test_phrases = [
             ("你好，世界！", "你好，世界！我是雪莉~"),
@@ -516,6 +568,103 @@ class SherrySpriteWindow(QMainWindow):
             logger.info(f"Language switched to: {lang_code} ({lang_name})")
         else:
             self.show_message(f"❌ 语言切换失败: {lang_code}")
+
+    def _configure_gptsovits_ref(self):
+        """🎙️ 配置 GPT-SoVITS 参考音频路径"""
+        if not HAS_TTS or not self.tts_manager:
+            self.show_message("❌ TTS 不可用")
+            return
+        
+        gptsovits = self.tts_manager.providers.get("gptsovits")
+        if not gptsovits:
+            self.show_message("❌ GPT-SoVITS 不可用")
+            return
+        
+        # 获取当前路径
+        current_path = ""
+        if hasattr(gptsovits, 'config'):
+            current_path = gptsovits.config.refer_wav_path or ""
+        
+        # 显示输入对话框
+        from PyQt6.QtWidgets import QInputDialog, QMessageBox
+        
+        text, ok = QInputDialog.getText(
+            self,
+            "配置参考音频",
+            "请输入参考音频的完整路径:\n(服务器上的路径，如 D:/ref.wav)",
+            text=current_path
+        )
+        
+        if ok and text:
+            if hasattr(gptsovits, 'config'):
+                gptsovits.config.refer_wav_path = text
+                filename = text.split("/")[-1].split("\\")[-1]
+                self.show_message(f"🎙️ 参考音频已更新:\n{filename[:30]}")
+                logger.info(f"GPT-SoVITS 参考音频更新: {text}")
+
+    def _configure_gptsovits_prompt(self):
+        """🎙️ 配置 GPT-SoVITS 参考文本"""
+        if not HAS_TTS or not self.tts_manager:
+            self.show_message("❌ TTS 不可用")
+            return
+        
+        gptsovits = self.tts_manager.providers.get("gptsovits")
+        if not gptsovits:
+            self.show_message("❌ GPT-SoVITS 不可用")
+            return
+        
+        # 获取当前文本
+        current_text = ""
+        if hasattr(gptsovits, 'config'):
+            current_text = gptsovits.config.prompt_text or ""
+        
+        from PyQt6.QtWidgets import QInputDialog
+        
+        text, ok = QInputDialog.getText(
+            self,
+            "配置参考文本",
+            "请输入参考音频对应的文本内容:",
+            text=current_text
+        )
+        
+        if ok and text:
+            if hasattr(gptsovits, 'config'):
+                gptsovits.config.prompt_text = text
+                display = text[:20] + "..." if len(text) > 20 else text
+                self.show_message(f"📝 参考文本已更新:\n{display}")
+                logger.info(f"GPT-SoVITS 参考文本更新: {text[:50]}...")
+
+    def _configure_gptsovits_speed(self, speed: float):
+        """🎙️ 配置 GPT-SoVITS 语速"""
+        if not HAS_TTS or not self.tts_manager:
+            return
+        
+        gptsovits = self.tts_manager.providers.get("gptsovits")
+        if gptsovits and hasattr(gptsovits, 'config'):
+            gptsovits.config.speed = speed
+            self.show_message(f"⚡ 语速已设置为: {speed}x")
+            logger.info(f"GPT-SoVITS 语速更新: {speed}x")
+
+    def _reset_gptsovits_config(self):
+        """🎙️ 恢复 GPT-SoVITS 默认配置 (Sakiko)"""
+        if not HAS_TTS or not self.tts_manager:
+            self.show_message("❌ TTS 不可用")
+            return
+        
+        gptsovits = self.tts_manager.providers.get("gptsovits")
+        if not gptsovits:
+            self.show_message("❌ GPT-SoVITS 不可用")
+            return
+        
+        if hasattr(gptsovits, 'config'):
+            # 恢复 Sakiko 默认配置
+            gptsovits.config.refer_wav_path = "D:/Workspace/1761703720454-qatfwm-sakiko1-e15/参考/なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね.wav"
+            gptsovits.config.prompt_text = "なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね"
+            gptsovits.config.prompt_language = "ja"
+            gptsovits.config.speed = 1.0
+            
+            self.show_message("🔄 GPT-SoVITS 已恢复默认\n🎀 Sakiko 声音配置")
+            logger.info("GPT-SoVITS 配置已恢复为默认值 (Sakiko)")
 
     def _test_tts(self, text: str):
         """Test TTS with given text"""
