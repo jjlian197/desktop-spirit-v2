@@ -32,6 +32,22 @@ try:
 except ImportError:
     HAS_TTS = False
 
+# Import STT Manager
+try:
+    from src.core.stt_manager import STTManager, create_stt_provider
+    HAS_STT = True
+except ImportError:
+    HAS_STT = False
+    logger.warning("STT 模块不可用")
+
+# Import Agent Bridge toggle
+try:
+    from src.brain.agent_bridge import set_agent_bridge_enabled, is_agent_bridge_enabled
+    HAS_AGENT_BRIDGE = True
+except ImportError:
+    HAS_AGENT_BRIDGE = False
+    logger.warning("Agent Bridge 模块不可用")
+
 # macOS Native Window Level Support
 HAS_MACOS_LEVEL = False
 if platform.system() == 'Darwin':
@@ -70,6 +86,18 @@ class SherrySpriteWindow(QMainWindow):
                 logger.info("✅ SpriteWindow: TTS manager initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize TTS manager: {e}")
+
+        # Initialize STT manager
+        self.stt_manager = None
+        self._stt_listening = False
+        if HAS_STT:
+            try:
+                self.stt_manager = create_stt_provider(language="zh")
+                self.stt_manager.on_transcript = self._on_stt_transcript
+                self.stt_manager.on_error = self._on_stt_error
+                logger.info("✅ SpriteWindow: STT manager initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize STT manager: {e}")
 
         # Setup window properties
         self._setup_window()
@@ -333,56 +361,51 @@ class SherrySpriteWindow(QMainWindow):
 
         tts_menu.addSeparator()
 
-        # 🎙️ GPT-SoVITS 配置菜单
-        if HAS_TTS and self.tts_manager and "gptsovits" in self.tts_manager.providers:
-            gptsovits_menu = tts_menu.addMenu("🎙️ GPT-SoVITS 配置")
-            
-            # 显示当前参考音频文件名
-            gptsovits_provider = self.tts_manager.providers.get("gptsovits")
-            ref_path = ""
-            if gptsovits_provider and hasattr(gptsovits_provider, 'config'):
-                ref_path = gptsovits_provider.config.refer_wav_path or ""
-            ref_filename = ref_path.split("/")[-1].split("\\")[-1] if ref_path else "未设置"
-            
-            # 参考音频配置
-            ref_action = QAction(f"📁 参考音频: {ref_filename[:20]}...", self)
-            ref_action.triggered.connect(self._configure_gptsovits_ref)
-            gptsovits_menu.addAction(ref_action)
-            
-            # 参考文本配置
-            prompt_text = ""
-            if gptsovits_provider and hasattr(gptsovits_provider, 'config'):
-                prompt_text = gptsovits_provider.config.prompt_text or ""
-            prompt_display = prompt_text[:15] + "..." if prompt_text else "未设置"
-            prompt_action = QAction(f"📝 参考文本: {prompt_display}", self)
-            prompt_action.triggered.connect(self._configure_gptsovits_prompt)
-            gptsovits_menu.addAction(prompt_action)
-            
-            # 语速配置子菜单
-            speed_menu = gptsovits_menu.addMenu("⚡ 语速")
-            current_speed = 1.0
-            if gptsovits_provider and hasattr(gptsovits_provider, 'config'):
-                current_speed = gptsovits_provider.config.speed
-            
-            for speed_label, speed_value in [
-                ("0.8x 慢速", 0.8),
-                ("1.0x 正常", 1.0),
-                ("1.2x 稍快", 1.2),
-                ("1.5x 快速", 1.5),
-            ]:
-                action = QAction(speed_label, self)
+        # 🎵 GPT-SoVITS Proxy 音色选择（多音色）
+        if HAS_TTS and self.tts_manager and "gptsovits_proxy" in self.tts_manager.providers:
+            proxy_menu = tts_menu.addMenu("🎵 GPT-SoVITS 音色")
+
+            # 中文音色子菜单
+            zh_voices = ["丁真", "七海", "东雪莲", "乃琳", "冰糖", "卡提希娅_zh", "向晚", "嘉然", "塔菲", "奶绿", "孙笑川", "守岸人_zh", "尼奈", "山泥若", "张顺飞", "恬豆", "扇宝", "扇宝（卖卖）", "文静", "星瞳", "李老八", "椿_zh", "炫神", "珂莱塔_zh", "珈乐", "电棍", "米诺", "菲比_zh", "蔡徐坤", "贝拉", "长离_zh", "阿梓", "陈泽"]
+            zh_menu = proxy_menu.addMenu("🇨🇳 中文音色")
+            for voice_name in zh_voices:
+                action = QAction(voice_name, self)
+                proxy_provider = self.tts_manager.providers.get("gptsovits_proxy")
+                if proxy_provider:
+                    action.setCheckable(True)
+                    action.setChecked(proxy_provider.voice_id == voice_name)
+                action.triggered.connect(lambda checked, v=voice_name: self._select_gptsovits_proxy_voice(v))
+                zh_menu.addAction(action)
+
+            # 日文音色子菜单
+            ja_voices = ["sakiko1", "坎特蕾拉_ja", "守岸人_ja", "椿_ja", "珂莱塔_ja", "男漂泊者_ja", "芙宁娜_ja", "菲比_ja", "长离_ja", "阿布_ja"]
+            ja_menu = proxy_menu.addMenu("🇯🇵 日文音色")
+            for voice_name in ja_voices:
+                action = QAction(voice_name, self)
+                proxy_provider = self.tts_manager.providers.get("gptsovits_proxy")
+                if proxy_provider:
+                    action.setCheckable(True)
+                    action.setChecked(proxy_provider.voice_id == voice_name)
+                action.triggered.connect(lambda checked, v=voice_name: self._select_gptsovits_proxy_voice(v))
+                ja_menu.addAction(action)
+
+            # 英文音色子菜单
+            en_menu = proxy_menu.addMenu("🇺🇸 英文音色")
+            action = QAction("科比", self)
+            proxy_provider = self.tts_manager.providers.get("gptsovits_proxy")
+            if proxy_provider:
                 action.setCheckable(True)
-                action.setChecked(abs(current_speed - speed_value) < 0.01)
-                action.triggered.connect(lambda checked, s=speed_value: self._configure_gptsovits_speed(s))
-                speed_menu.addAction(action)
-            
-            gptsovits_menu.addSeparator()
-            
-            # 恢复默认配置
-            reset_action = QAction("🔄 恢复默认 (Sakiko)", self)
-            reset_action.triggered.connect(self._reset_gptsovits_config)
-            gptsovits_menu.addAction(reset_action)
-            
+                action.setChecked(proxy_provider.voice_id == "科比")
+            action.triggered.connect(lambda checked, v="科比": self._select_gptsovits_proxy_voice(v))
+            en_menu.addAction(action)
+
+            proxy_menu.addSeparator()
+
+            # 切换到 GPT-SoVITS Proxy
+            switch_action = QAction("🔄 切换到 GPT-SoVITS Proxy", self)
+            switch_action.triggered.connect(lambda: self._switch_tts_provider("gptsovits_proxy"))
+            proxy_menu.addAction(switch_action)
+
             tts_menu.addSeparator()
 
         # Test phrases
@@ -413,6 +436,40 @@ class SherrySpriteWindow(QMainWindow):
 
         menu.addSeparator()
 
+        # 🎤 语音识别 (STT) 菜单
+        stt_menu = menu.addMenu("🎤 语音识别 (STT)")
+
+        if HAS_STT and self.stt_manager:
+            # 语音识别开关
+            stt_toggle_action = QAction("🎙️ 开始语音对话", self)
+            stt_toggle_action.setCheckable(True)
+            stt_toggle_action.setChecked(self._stt_listening)
+            stt_toggle_action.triggered.connect(self._toggle_stt_listening)
+            stt_menu.addAction(stt_toggle_action)
+
+            stt_menu.addSeparator()
+
+            # 语言选择
+            stt_lang_menu = stt_menu.addMenu("🌐 识别语言")
+            stt_languages = self.stt_manager.get_available_languages()
+            for lang_code, lang_name in stt_languages.items():
+                action = QAction(f"{lang_name}", self)
+                action.triggered.connect(lambda checked, l=lang_code: self._set_stt_language(l))
+                stt_lang_menu.addAction(action)
+
+            stt_menu.addSeparator()
+
+            # 提示信息
+            hint_action = QAction("💡 使用 macOS 原生语音识别", self)
+            hint_action.setEnabled(False)
+            stt_menu.addAction(hint_action)
+        else:
+            stt_unavailable = QAction("STT 不可用", self)
+            stt_unavailable.setEnabled(False)
+            stt_menu.addAction(stt_unavailable)
+
+        menu.addSeparator()
+
         # 背景菜单
         bg_menu = menu.addMenu("🎨 背景 (Background)")
         trans_bg = QAction("透明 (Transparent)", self)
@@ -434,7 +491,16 @@ class SherrySpriteWindow(QMainWindow):
         menu.addAction(mouse_follow_action)
         
         menu.addSeparator()
-        
+
+        # 🤖 Agent Bridge 开关
+        if HAS_AGENT_BRIDGE:
+            agent_bridge_action = QAction("🤖 Agent Bridge", self)
+            agent_bridge_action.setCheckable(True)
+            agent_bridge_action.setChecked(is_agent_bridge_enabled())
+            agent_bridge_action.triggered.connect(self._toggle_agent_bridge)
+            menu.addAction(agent_bridge_action)
+            menu.addSeparator()
+
         # 🏠 回家模式
         home_mode_action = QAction("🏠 启动回家模式", self)
         home_mode_action.triggered.connect(self._launch_home_mode)
@@ -451,7 +517,16 @@ class SherrySpriteWindow(QMainWindow):
         self._watermark_enabled = not self._watermark_enabled
         val = -1.0 if self._watermark_enabled else 0.0
         self.set_parameter("Open_EyeMask4", val)
-    
+
+    def _toggle_agent_bridge(self):
+        """🤖 切换 Agent Bridge 开关状态"""
+        if not HAS_AGENT_BRIDGE:
+            return
+        current = is_agent_bridge_enabled()
+        set_agent_bridge_enabled(not current)
+        status = "开启" if not current else "关闭"
+        self.show_message(f"Agent Bridge 已{status}", 2000)
+
     def _launch_home_mode(self):
         """🏠 启动回家模式 - 通过 openclaw 发送消息"""
         try:
@@ -569,102 +644,23 @@ class SherrySpriteWindow(QMainWindow):
         else:
             self.show_message(f"❌ 语言切换失败: {lang_code}")
 
-    def _configure_gptsovits_ref(self):
-        """🎙️ 配置 GPT-SoVITS 参考音频路径"""
+    def _select_gptsovits_proxy_voice(self, voice_name: str):
+        """🎵 切换 GPT-SoVITS Proxy 音色"""
         if not HAS_TTS or not self.tts_manager:
-            self.show_message("❌ TTS 不可用")
             return
-        
-        gptsovits = self.tts_manager.providers.get("gptsovits")
-        if not gptsovits:
-            self.show_message("❌ GPT-SoVITS 不可用")
-            return
-        
-        # 获取当前路径
-        current_path = ""
-        if hasattr(gptsovits, 'config'):
-            current_path = gptsovits.config.refer_wav_path or ""
-        
-        # 显示输入对话框
-        from PyQt6.QtWidgets import QInputDialog, QMessageBox
-        
-        text, ok = QInputDialog.getText(
-            self,
-            "配置参考音频",
-            "请输入参考音频的完整路径:\n(服务器上的路径，如 D:/ref.wav)",
-            text=current_path
-        )
-        
-        if ok and text:
-            if hasattr(gptsovits, 'config'):
-                gptsovits.config.refer_wav_path = text
-                filename = text.split("/")[-1].split("\\")[-1]
-                self.show_message(f"🎙️ 参考音频已更新:\n{filename[:30]}")
-                logger.info(f"GPT-SoVITS 参考音频更新: {text}")
 
-    def _configure_gptsovits_prompt(self):
-        """🎙️ 配置 GPT-SoVITS 参考文本"""
-        if not HAS_TTS or not self.tts_manager:
-            self.show_message("❌ TTS 不可用")
+        proxy_provider = self.tts_manager.providers.get("gptsovits_proxy")
+        if not proxy_provider:
             return
-        
-        gptsovits = self.tts_manager.providers.get("gptsovits")
-        if not gptsovits:
-            self.show_message("❌ GPT-SoVITS 不可用")
-            return
-        
-        # 获取当前文本
-        current_text = ""
-        if hasattr(gptsovits, 'config'):
-            current_text = gptsovits.config.prompt_text or ""
-        
-        from PyQt6.QtWidgets import QInputDialog
-        
-        text, ok = QInputDialog.getText(
-            self,
-            "配置参考文本",
-            "请输入参考音频对应的文本内容:",
-            text=current_text
-        )
-        
-        if ok and text:
-            if hasattr(gptsovits, 'config'):
-                gptsovits.config.prompt_text = text
-                display = text[:20] + "..." if len(text) > 20 else text
-                self.show_message(f"📝 参考文本已更新:\n{display}")
-                logger.info(f"GPT-SoVITS 参考文本更新: {text[:50]}...")
 
-    def _configure_gptsovits_speed(self, speed: float):
-        """🎙️ 配置 GPT-SoVITS 语速"""
-        if not HAS_TTS or not self.tts_manager:
-            return
-        
-        gptsovits = self.tts_manager.providers.get("gptsovits")
-        if gptsovits and hasattr(gptsovits, 'config'):
-            gptsovits.config.speed = speed
-            self.show_message(f"⚡ 语速已设置为: {speed}x")
-            logger.info(f"GPT-SoVITS 语速更新: {speed}x")
+        # 切换到 proxy provider
+        self.tts_manager.set_provider("gptsovits_proxy")
 
-    def _reset_gptsovits_config(self):
-        """🎙️ 恢复 GPT-SoVITS 默认配置 (Sakiko)"""
-        if not HAS_TTS or not self.tts_manager:
-            self.show_message("❌ TTS 不可用")
-            return
-        
-        gptsovits = self.tts_manager.providers.get("gptsovits")
-        if not gptsovits:
-            self.show_message("❌ GPT-SoVITS 不可用")
-            return
-        
-        if hasattr(gptsovits, 'config'):
-            # 恢复 Sakiko 默认配置
-            gptsovits.config.refer_wav_path = "D:/Workspace/1761703720454-qatfwm-sakiko1-e15/参考/なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね.wav"
-            gptsovits.config.prompt_text = "なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね"
-            gptsovits.config.prompt_language = "ja"
-            gptsovits.config.speed = 1.0
-            
-            self.show_message("🔄 GPT-SoVITS 已恢复默认\n🎀 Sakiko 声音配置")
-            logger.info("GPT-SoVITS 配置已恢复为默认值 (Sakiko)")
+        # 设置音色
+        proxy_provider.voice_id = voice_name
+
+        self.show_message(f"🎵 音色已切换: {voice_name}")
+        logger.info(f"GPT-SoVITS-Proxy 音色切换: {voice_name}")
 
     def _test_tts(self, text: str):
         """Test TTS with given text"""
@@ -815,3 +811,221 @@ class SherrySpriteWindow(QMainWindow):
         
         # Use QTimer to avoid blocking UI
         QTimer.singleShot(0, send_mouse_follow_request)
+
+    # === 🎤 STT 语音识别相关方法 ===
+
+    def _toggle_stt_listening(self, checked: bool):
+        """切换语音识别监听状态"""
+        if not HAS_STT or not self.stt_manager:
+            self.show_message("❌ STT 不可用", 2000)
+            return
+
+        from PyQt6.QtCore import QTimer
+
+        def run_async(coro):
+            """在 Qt 环境中安全运行异步函数"""
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            # 在新线程中运行 asyncio
+            import threading
+            def _run():
+                asyncio.run(coro)
+
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+
+        if checked:
+            # 开始监听
+            self.stt_manager.start_listening()
+            self._stt_listening = True
+            self.show_message("🎤 在听你说...", 2000)
+            # 雪莉看向主人（假设主人在屏幕中央）
+            self.set_expression("happy")
+            logger.info("🎤 STT 监听已启动")
+        else:
+            # 停止监听
+            self.stt_manager.stop_listening()
+            self._stt_listening = False
+            self.show_message("👋 语音对话已关闭", 2000)
+            logger.info("🎤 STT 监听已停止")
+
+    def _set_stt_language(self, language: str):
+        """设置 STT 识别语言"""
+        if not HAS_STT or not self.stt_manager:
+            return
+
+        if hasattr(self.stt_manager, 'set_language'):
+            success = self.stt_manager.set_language(language)
+            if success:
+                lang_names = {
+                    "zh": "中文",
+                    "en": "英文",
+                    "ja": "日文",
+                    "ko": "韩文",
+                }
+                self.show_message(f"🌐 识别语言: {lang_names.get(language, language)}", 2000)
+
+    def _on_stt_transcript(self, text: str, is_final: bool):
+        """🎤 STT 识别到文字后的回调"""
+        if not text or not is_final:
+            return
+
+        logger.info(f"🎤 STT 识别文字: {text}")
+
+        # 检测唤醒词
+        wake_words = ["雪莉", "Sherry", "sherry", "雪梨"]
+        detected_name = None
+        for name in wake_words:
+            if name in text:
+                detected_name = name
+                break
+
+        if not detected_name:
+            return
+
+        logger.info(f"🎤 检测到唤醒词: {detected_name}")
+
+        # 提取唤醒词后面的内容
+        idx = text.find(detected_name)
+        user_text = text[idx + len(detected_name):].lstrip("，,、 ：:")
+
+        if user_text:
+            # 有具体内容 → 发送给 Agent
+            self._send_voice_to_agent(user_text)
+        else:
+            # 只有唤醒词 → 简单确认
+            self._voice_acknowledge()
+
+    def _voice_acknowledge(self):
+        """语音确认：告诉用户听到了"""
+        def delayed_speak():
+            import time
+            time.sleep(0.3)
+            self._do_tts_speak("主人我听到了！")
+
+        import threading
+        t = threading.Thread(target=delayed_speak, daemon=True)
+        t.start()
+
+    def _send_voice_to_agent(self, user_text: str):
+        """发送语音内容给 Agent 并获取响应，通过 TTS 朗读"""
+        from src.brain.agent_bridge import call_agent
+
+        def agent_thread():
+            try:
+                logger.info(f"🎤 发送语音到 Agent: {user_text}")
+                response = call_agent(message=user_text, timeout=60)
+
+                if response:
+                    logger.info(f"🎤 Agent 响应: {response[:50]}...")
+                    self._do_tts_speak(response)
+                else:
+                    logger.warning("Agent 返回空响应")
+                    self._do_tts_speak("抱歉，我没有收到回复")
+            except Exception as e:
+                logger.error(f"Agent 调用失败: {e}")
+                self._do_tts_speak("抱歉，出错了")
+
+        import threading
+        t = threading.Thread(target=agent_thread, daemon=True)
+        t.start()
+
+    def _do_tts_speak(self, text: str):
+        """执行 TTS 朗读（线程安全）"""
+        try:
+            if self.tts_manager and HAS_TTS:
+                self.tts_manager.speak_sync(text)
+            else:
+                import subprocess
+                subprocess.run(["say", text])
+        except Exception as e:
+            logger.error(f"TTS 朗读失败: {e}")
+            try:
+                import subprocess
+                subprocess.run(["say", text])
+            except Exception:
+                pass
+
+    def _send_to_brain(self, text: str):
+        """发送文字给大脑处理"""
+        import urllib.request
+        import urllib.error
+        import json
+
+        try:
+            data = json.dumps({
+                "type": "chat",
+                "data": {"message": text}
+            }).encode('utf-8')
+
+            req = urllib.request.Request(
+                "http://127.0.0.1:8766/api/command",
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+
+            with urllib.request.urlopen(req, timeout=5) as response:
+                if response.status == 200:
+                    logger.info(f"📤 已发送文字给大脑: {text}")
+                else:
+                    logger.warning(f"⚠️ 大脑响应异常: {response.status}")
+
+        except urllib.error.URLError as e:
+            logger.error(f"发送文字到大脑失败: {e}")
+            # 如果大脑不响应，雪莉直接用本地回复
+            self._local_chat_response(text)
+        except Exception as e:
+            logger.error(f"发送文字到大脑错误: {e}")
+            self._local_chat_response(text)
+
+    def _local_chat_response(self, text: str):
+        """本地聊天回复（当大脑不可用时）"""
+        # 简单的关键词回复
+        text_lower = text.lower()
+
+        responses = {
+            "你好": "你好呀~主人！",
+            "嗨": "嗨~主人！",
+            "早上好": "早安~主人！",
+            "晚安": "晚安~主人，好梦哦~",
+            "可爱": "嘿嘿，雪莉被夸可爱了~",
+            "喜欢你": "雪莉也最喜欢主人了！",
+            "叫什么": "雪莉叫雪莉呀~主人的小宠物~",
+            "几岁": "雪莉永远 18 岁哦~",
+        }
+
+        response = None
+        for key, reply in responses.items():
+            if key in text:
+                response = reply
+                break
+
+        if not response:
+            response = "嗯...雪莉听不太清楚呢~"
+
+        self.set_expression("happy")
+        self.show_message(f"💬 {response}", 3000)
+
+        # 如果有 TTS，说出来
+        if HAS_TTS and self.tts_manager:
+            import threading
+            def run_tts():
+                try:
+                    self.tts_manager.speak_sync(response)
+                except Exception as e:
+                    logger.error(f"TTS error: {e}")
+
+            thread = threading.Thread(target=run_tts, daemon=True)
+            thread.start()
+
+    def _on_stt_error(self, error: str):
+        """STT 错误回调"""
+        logger.error(f"🎤 STT 错误: {error}")
+        self.show_message(f"❌ 语音识别错误: {error}", 3000)
+        self._stt_listening = False

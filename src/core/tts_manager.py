@@ -507,7 +507,7 @@ class LocalTTSProvider(BaseTTSProvider):
 # =============================================================================
 
 try:
-    from src.core.gpt_sovits_provider import GPTSoVITSProvider, GPTSoVITSConfig
+    from src.core.gpt_sovits_provider import GPTSoVITSProvider, GPTSoVITSConfig, GPTSoVITSProxyProvider
     HAS_GPT_SOVITS = True
 except ImportError:
     HAS_GPT_SOVITS = False
@@ -636,13 +636,13 @@ class TTSManager(QObject):
             "local": LocalTTSProvider(),
         }
         
-        # 🎙️ GPT-SoVITS 高质量语音合成（如果可用）
+        # 🎙️ GPT-SoVITS Proxy 多音色版本
         if HAS_GPT_SOVITS:
             try:
-                self.providers["gptsovits"] = GPTSoVITSProvider()
-                logger.info("✅ TTSManager: GPT-SoVITS 已加载")
+                self.providers["gptsovits_proxy"] = GPTSoVITSProxyProvider()
+                logger.info("✅ TTSManager: GPT-SoVITS-Proxy 已加载")
             except Exception as e:
-                logger.warning(f"⚠️ TTSManager: GPT-SoVITS 加载失败: {e}")
+                logger.warning(f"⚠️ TTSManager: GPT-SoVITS-Proxy 加载失败: {e}")
         
         self.current_provider = self._select_provider(preferred_provider)
         self.audio_analyzer = AudioAnalyzer(frame_rate=30)
@@ -671,7 +671,66 @@ class TTSManager(QObject):
         self._playback_timer.timeout.connect(self._on_playback_frame)
         
         logger.info(f"🎙️ TTSManager initialized: {self.current_provider.name}")
-    
+
+        # 🚀 检查并自动启动 GPT-SoVITS-Proxy
+        self._ensure_proxy_running()
+
+    def _ensure_proxy_running(self):
+        """检查 GPT-SoVITS-Proxy 是否运行，没有则自动启动"""
+        import urllib.request
+        import urllib.error
+
+        proxy = self.providers.get("gptsovits_proxy")
+        if not proxy:
+            return
+
+        # 先用同步 HTTP 检查代理是否运行
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8000/health",
+                method='GET'
+            )
+            with urllib.request.urlopen(req, timeout=3) as response:
+                if response.status == 200:
+                    logger.info("✅ GPT-SoVITS-Proxy 已运行")
+                    return
+        except Exception:
+            pass
+
+        # 代理未运行，尝试启动
+        logger.warning("⚠️ GPT-SoVITS-Proxy 未运行，尝试启动...")
+        script_path = os.path.expanduser("~/.openclaw/skills/gpt-sovits-voice/scripts/sovits_proxy.py")
+
+        if not os.path.exists(script_path):
+            logger.error(f"❌ Proxy 脚本不存在: {script_path}")
+            return
+
+        try:
+            # 使用 nohup 后台启动，使用 /usr/bin/python3（有 fastapi 模块）
+            subprocess.Popen(
+                ["/usr/bin/nohup", "/usr/bin/python3", script_path, "--port", "8000"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            logger.info("🚀 GPT-SoVITS-Proxy 启动命令已执行（后台运行）")
+
+            # 等待代理启动（最多 5 秒）
+            for i in range(10):
+                time.sleep(0.5)
+                try:
+                    req = urllib.request.Request("http://127.0.0.1:8000/health", method='GET')
+                    with urllib.request.urlopen(req, timeout=2) as response:
+                        if response.status == 200:
+                            logger.info("✅ GPT-SoVITS-Proxy 已自动启动")
+                            return
+                except Exception:
+                    continue
+
+            logger.error("❌ GPT-SoVITS-Proxy 启动超时")
+        except Exception as e:
+            logger.error(f"❌ 启动 Proxy 失败: {e}")
+
     # -------------------------------------------------------------------------
     # Provider Management
     # -------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from aiohttp import web
 
 from src.brain.mood_engine import MoodEngine
 from src.brain.soul import SherrySoul
+from src.brain.agent_bridge import create_agent_bridge
 
 # 配置日志
 logging.basicConfig(
@@ -34,10 +35,16 @@ class SpriteBrain:
         self.running = False
         self.http_runner = None
         self.http_site = None
-        
+
         # 核心引擎
         self.mood = MoodEngine()
         self.soul = SherrySoul()
+
+        # 🚨 Agent 通信桥 - Sherry ↔ OpenClaw CLI 通信
+        self.agent_bridge = create_agent_bridge(
+            agent_name="main",
+            default_target="8046601710"
+        )
         
         # 鼠标跟随配置 - V2: 增强版大角度头部+身体跟随
         self.mouse_config = {
@@ -233,7 +240,10 @@ class SpriteBrain:
         # 🚨 TTS 时暂停鼠标跟随并回正
         self._pause_mouse_follow("tts")
         await self._reset_to_center()
-        
+
+        # 🚨 发送开始说话反馈给 Agent
+        self.agent_bridge.send_speak(text, self.mood.current_mood)
+
         result = await self.send_command("speak", {"text": text})
         
         # 🚨 TTS 结束后恢复鼠标跟随
@@ -354,6 +364,8 @@ class SpriteBrain:
         self.idle_motion_playing = False
         if was_idle:
             logger.info(f"👋 主人回来啦！退出空闲状态 (来源: {caller_info})")
+            # 🚨 发送空闲退出反馈给 Agent
+            self.agent_bridge.send_idle_exit()
         else:
             logger.info(f"🔄 空闲计时器重置 (来源: {caller_info})")
     
@@ -376,6 +388,8 @@ class SpriteBrain:
             if idle_time >= self.idle_config["idle_timeout"] and not self.is_idle:
                 self.is_idle = True
                 logger.info(f"😴 进入空闲状态（已闲置 {idle_time:.1f} 秒）")
+                # 🚨 发送空闲进入反馈给 Agent
+                self.agent_bridge.send_idle_enter(idle_time)
             
             # 空闲状态下播放待机动画
             if self.is_idle and not self.idle_motion_playing:
@@ -596,7 +610,17 @@ class SpriteBrain:
         all_responses = reaction["responses"] + mood_responses
         response = random.choice(all_responses)
         await self.speak(response)
-        
+
+        # 🚨 发送触摸反馈给 Agent
+        tier_desc = self.mood.get_affection_desc()
+        self.agent_bridge.send_touch_feedback(
+            part=part,
+            action=action,
+            mood=current_mood,
+            affection=affection,
+            response=response
+        )
+
         # 3秒后恢复普通表情
         await asyncio.sleep(3)
         await self.set_expression(self.mood.get_current_expression())
@@ -704,9 +728,15 @@ class SpriteBrain:
                 affection = self.mood.affection_level
                 tier_desc = self.mood.get_affection_desc()
                 unlocked = self.mood.get_unlocked_expressions()
-                
+
                 if affection != old_affection:
                     logger.info(f"💔 好感度变化: {old_affection} → {affection} ({tier_desc})")
+                    # 🚨 发送心情变化反馈给 Agent
+                    self.agent_bridge.send_mood_change(
+                        old_affection=old_affection,
+                        new_affection=affection,
+                        tier=tier_desc
+                    )
                 else:
                     logger.info(f"💕 当前好感度: {affection} ({tier_desc})，解锁: {unlocked}")
                 
@@ -766,17 +796,31 @@ class SpriteBrain:
             if cmd_type == "speak":
                 self.mouse_config["enabled"] = False
                 await self._reset_to_center()
-                
+
                 # 估算语音长度，文字越长注视时间越久 (大致每字0.25秒 + 1秒缓冲)
                 text = cmd_data.get("text", "")
                 duration = max(2.0, len(text) * 0.25 + 1.0)
-                
+
                 async def restore_mouse():
                     await asyncio.sleep(duration)
                     self.mouse_config["enabled"] = True
                     logger.info("🐭 语音结束，恢复鼠标跟随")
-                
+
                 asyncio.create_task(restore_mouse())
+
+            # 🚨 处理 chat 命令（STT 语音对话）
+            elif cmd_type == "chat":
+                user_message = cmd_data.get("message", "")
+                logger.info(f"🎤 收到语音输入: {user_message}")
+
+                # 检测是否叫雪莉的名字
+                if any(name in user_message for name in ["雪莉", "Sherry", "sherry"]):
+                    await self.set_expression("happy")
+                    await self.speak("主人我听到了！")
+                    return web.json_response({"success": True, "message": "Response sent"})
+
+                # 其他对话暂时不处理
+                return web.json_response({"success": True, "message": "Ignored"})
 
             # 转发到 WebSocket
             success = await self.send_command(cmd_type, cmd_data)
@@ -929,6 +973,9 @@ class SpriteBrain:
         http_task = asyncio.create_task(self._start_http_server())
         # 等待 HTTP 服务器启动完成
         await asyncio.sleep(0.5)
+        # 🚨 启动 Agent Bridge 连接（后台线程运行）
+        self.agent_bridge.connect()
+        logger.info(f"🔗 Agent Bridge 启动，Agent: {self.agent_bridge.agent_name}")
         # 启动主连接循环
         await self.connect()
         # 清理 HTTP 服务器
@@ -936,6 +983,106 @@ class SpriteBrain:
 
     def stop(self):
         self.running = False
+        self.agent_bridge.disconnect()
+
+    # === 🚨 处理来自 Agent 的命令 ===
+    async def _handle_agent_command(self, command: str, data: dict):
+        """
+        处理来自 Openclaw Agent 的命令
+        Agent 可以发送: speak, expression, motion, trigger_action
+        """
+        logger.info(f"📥 Agent 命令: {command}, 数据: {data}")
+
+        try:
+            if command == "speak":
+                # Agent 让 Sherry 说话
+                text = data.get("text", "")
+                emotion = data.get("emotion")
+                if text:
+                    if emotion:
+                        await self.set_expression(emotion)
+                    await self.speak(text)
+                    # 说话完成反馈（已通过 send_speak 发送）
+
+            elif command == "expression":
+                # Agent 控制 Sherry 的表情
+                expr_name = data.get("name", "normal")
+                await self.set_expression(expr_name)
+
+            elif command == "motion":
+                # Agent 触发动作
+                group = data.get("group", "Idle")
+                await self.trigger_motion(group)
+
+            elif command == "trigger_action":
+                # Agent 触发复杂动作序列
+                action_type = data.get("type", "wave")
+                if action_type == "wave":
+                    await self.set_expression("happy")
+                    await asyncio.sleep(0.3)
+                    await self.trigger_motion("Wave")
+                elif action_type == "dance":
+                    await self.set_expression("love")
+                    await self.trigger_motion("Dance")
+
+            elif command == "get_status":
+                # Agent 查询 Sherry 状态
+                self.agent_bridge.send_status_report(
+                    mood=self.mood.current_mood,
+                    affection=self.mood.affection_level,
+                    tier=self.mood.get_affection_desc(),
+                    is_idle=self.is_idle,
+                    tts_enabled=self.tts_config["enabled"]
+                )
+
+            elif command == "chat":
+                # 🚨 Agent 发起对话请求（主人通过 Agent 与 Sherry 对话）
+                user_message = data.get("message", "")
+                if user_message:
+                    await self._handle_agent_chat(user_message)
+
+            else:
+                logger.warning(f"⚠️ 未知 Agent 命令: {command}")
+
+        except Exception as e:
+            logger.error(f"处理 Agent 命令失败: {e}")
+
+    async def _handle_agent_chat(self, user_message: str):
+        """
+        处理通过 Agent 发起的对话
+        这是 Sherry 响应主人消息的场景
+        """
+        logger.info(f"💬 Agent 对话: {user_message}")
+
+        # 根据消息内容和当前心情生成回复
+        response = self.soul.get_soulful_response(
+            self.mood.current_mood,
+            event="agent_chat"
+        )
+
+        # 特殊情绪反馈
+        if any(word in user_message for word in ["喜欢", "爱你", "好可爱"]):
+            await self.set_expression("love")
+            response = random.choice([
+                "主人...雪莉也最喜欢你了！",
+                "嘿嘿，雪莉听到了！",
+                "呜～雪莉好开心～"
+            ])
+        elif any(word in user_message for word in ["抱抱", "摸摸", "亲亲"]):
+            await self.set_expression("blush")
+            response = random.choice([
+                "主人的怀抱好温暖...",
+                "雪莉要融化啦～",
+                "还要更多..."
+            ])
+        else:
+            await self.set_expression("happy")
+
+        await self.speak(response)
+
+        # 对话完成反馈给 Agent
+        chat_msg = f"💬 对话 | 你说: {user_message} | 雪莉回复: {response}"
+        self.agent_bridge.send_message(chat_msg)
 
 if __name__ == "__main__":
     asyncio.run(SpriteBrain().start())

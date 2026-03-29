@@ -53,6 +53,10 @@ a = Analysis(
         # Live2D
         'live2d',
         'live2d.v3',
+        # STT 相关
+        'faster_whisper',
+        'pyaudio',
+        'cffi',
         # 其他
         'numpy',
         'yaml',

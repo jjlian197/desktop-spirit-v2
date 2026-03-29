@@ -411,3 +411,169 @@ class GPTSoVITSProviderSimple(GPTSoVITSProvider):
 
 # 兼容性别名
 GPTSoVITSTTSProvider = GPTSoVITSProvider
+
+
+class GPTSoVITSProxyProvider(BaseTTSProvider):
+    """
+    GPT-SoVITS Proxy Provider - 多音色版本
+    使用 Mac 本地代理 http://127.0.0.1:8000，通过 voice 参数直接选择音色
+
+    API: POST http://127.0.0.1:8000/v1/audio/speech
+    Body: {"input": "text", "voice": "voicename"}
+    """
+
+    def __init__(self, api_url: str = "http://127.0.0.1:8000"):
+        super().__init__("GPT-SoVITS-Proxy")
+        self.api_url = api_url.rstrip('/') + "/v1/audio/speech"
+        self._voice_id: str = "sakiko1"  # 默认音色
+        self._speed: float = 1.0
+        self._initialized = True
+        # 🚀 音频缓存：{cache_key: audio_path}
+        self._cache: dict[str, str] = {}
+        self._cache_dir = os.path.join(tempfile.gettempdir(), "sherry_tts_cache")
+        os.makedirs(self._cache_dir, exist_ok=True)
+        logger.info(f"✅ GPT-SoVITS-Proxy initialized: {self.api_url}, cache dir: {self._cache_dir}")
+
+    @property
+    def voice_id(self) -> str:
+        return self._voice_id
+
+    @voice_id.setter
+    def voice_id(self, value: str):
+        self._voice_id = value
+        logger.info(f"🎙️ GPT-SoVITS-Proxy 音色切换: {value}")
+
+    def set_speed(self, speed: float):
+        self._speed = speed
+
+    def is_available(self) -> bool:
+        return self._initialized
+
+    def _get_cache_key(self, text: str, voice: str) -> str:
+        """生成缓存 key（基于 text 和 voice 的 hash）"""
+        import hashlib
+        key = f"{voice}:{text}"
+        return hashlib.md5(key.encode()).hexdigest()
+
+    async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
+        """使用代理 API 生成语音（带缓存）"""
+        voice = voice_id or self._voice_id
+
+        # 🚀 检查缓存
+        cache_key = self._get_cache_key(text, voice)
+        cached_path = os.path.join(self._cache_dir, f"{cache_key}.wav")
+        if os.path.exists(cached_path):
+            duration_ms = await self._get_audio_duration(cached_path, text)
+            logger.info(f"🎙️ GPT-SoVITS-Proxy 缓存命中: {text[:20]}... (voice: {voice})")
+            return TTSResult(
+                audio_path=cached_path,
+                text=text,
+                duration_ms=duration_ms,
+                sample_rate=24000,
+                success=True
+            )
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            output_path = f.name
+
+        # 代理返回 ogg 格式，下载后转码为 wav
+        ogg_path = output_path + ".ogg"
+
+        try:
+            import aiohttp
+
+            payload = {
+                "input": text,
+                "voice": voice
+            }
+
+            logger.info(f"🎙️ GPT-SoVITS-Proxy: '{text[:30]}...' (voice: {voice}, speed: {self._speed})")
+
+            timeout = aiohttp.ClientTimeout(total=120)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    self.api_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"}
+                ) as response:
+                    if response.status == 400:
+                        error_text = await response.text()
+                        raise Exception(f"Voice not found or invalid: {error_text[:200]}")
+                    elif response.status != 200:
+                        error_text = await response.text()
+                        raise Exception(f"API error {response.status}: {error_text[:500]}")
+
+                    audio_data = await response.read()
+                    if len(audio_data) < 100:
+                        raise Exception("Invalid audio data received")
+
+                    with open(ogg_path, "wb") as f:
+                        f.write(audio_data)
+
+                    # 转码为 WAV（afplay 对 opus/ogg 支持不完整）
+                    import subprocess
+                    result = subprocess.run(
+                        ["ffmpeg", "-y", "-i", ogg_path, "-acodec", "pcm_s16le", "-ar", "24000", cached_path],
+                        capture_output=True, timeout=30
+                    )
+                    if result.returncode != 0:
+                        raise Exception(f"WAV conversion failed: {result.stderr.decode()[:200]}")
+                    # 删除临时 ogg 和原始 temp wav 文件
+                    os.unlink(ogg_path)
+                    if os.path.exists(output_path):
+                        os.unlink(output_path)
+                    # 更新缓存记录
+                    self._cache[cache_key] = cached_path
+
+            duration_ms = await self._get_audio_duration(cached_path, text)
+            logger.info(f"✅ GPT-SoVITS-Proxy: 生成完成 ({duration_ms/1000:.1f}s)")
+
+            return TTSResult(
+                audio_path=cached_path,
+                text=text,
+                duration_ms=duration_ms,
+                sample_rate=24000,
+                success=True
+            )
+
+        except asyncio.TimeoutError:
+            logger.error("❌ GPT-SoVITS-Proxy: 请求超时")
+            self._cleanup_file(output_path)
+            self._cleanup_file(ogg_path)
+            return TTSResult(audio_path="", text=text, duration_ms=0, sample_rate=32000, success=False, error="Timeout")
+        except Exception as e:
+            logger.error(f"❌ GPT-SoVITS-Proxy error: {e}")
+            self._cleanup_file(output_path)
+            self._cleanup_file(ogg_path)
+            return TTSResult(audio_path="", text=text, duration_ms=0, sample_rate=32000, success=False, error=str(e))
+
+    async def _get_audio_duration(self, audio_path: str, text: str = "") -> float:
+        """计算音频时长"""
+        try:
+            import wave
+            with wave.open(audio_path, 'rb') as wav:
+                frames = wav.getnframes()
+                rate = wav.getframerate()
+                if rate > 0:
+                    return (frames / rate) * 1000
+        except Exception:
+            pass
+        return len(text) * 220
+
+    def _cleanup_file(self, filepath: str):
+        try:
+            if os.path.exists(filepath):
+                os.unlink(filepath)
+        except Exception:
+            pass
+
+    async def check_health(self) -> bool:
+        """检查代理服务健康状态"""
+        try:
+            import aiohttp
+            health_url = self.api_url.rsplit('/v1/audio/speech', 1)[0] + "/health"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    return response.status == 200
+        except Exception:
+            return False
