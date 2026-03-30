@@ -202,25 +202,6 @@ class SpriteBrain:
 
     async def set_expression(self, expression_name: str):
         return await self.send_command("expression", {"name": expression_name})
-    
-    async def _reset_to_center(self):
-        """🚨 重置所有参数，让模型看向正前方"""
-        logger.info("🎯 重置模型姿态，看向正前方...")
-        
-        # 重置目标参数为0
-        for k in self.target_params:
-            self.target_params[k] = 0.0
-            self.current_params[k] = 0.0
-        
-        # 发送重置命令
-        reset_params = {k: 0.0 for k in self.current_params}
-        await self.send_command("parameter_batch", {"params": reset_params})
-        
-        # 再发送一次确保生效
-        await asyncio.sleep(0.1)
-        await self.send_command("parameter_batch", {"params": reset_params})
-        
-        logger.info("✅ 模型已复位到正前方")
 
     async def speak(self, text: str, interactive: bool = True):
         """

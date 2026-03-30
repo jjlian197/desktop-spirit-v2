@@ -5,6 +5,7 @@ Sherry Agent Bridge (雪莉 ↔ OpenClaw Agent CLI 通信桥)
 """
 
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -35,7 +36,7 @@ def call_agent(
     message: str,
     agent_name: str = "main",
     channel: str = "telegram",
-    target: str = "8046601710",
+    target: Optional[str] = None,
     timeout: int = 60
 ) -> Optional[str]:
     """
@@ -51,6 +52,10 @@ def call_agent(
     Returns:
         Agent 的 stdout 响应文字，或 None（失败时）
     """
+    # 🚨 从环境变量读取 target，避免硬编码敏感信息
+    if target is None:
+        target = os.environ.get("AGENT_DEFAULT_TARGET", "")
+
     if not _agent_bridge_enabled:
         logger.debug("Agent Bridge 已关闭，跳过调用")
         return None
@@ -105,7 +110,7 @@ class AgentBridge:
         self,
         agent_name: str = "main",
         default_channel: str = "telegram",
-        default_target: str = "8046601710"
+        default_target: Optional[str] = None
     ):
         """
         Args:
@@ -115,7 +120,8 @@ class AgentBridge:
         """
         self.agent_name = agent_name
         self.default_channel = default_channel
-        self.default_target = default_target
+        # 🚨 从环境变量读取，避免硬编码敏感信息
+        self.default_target = default_target or os.environ.get("AGENT_DEFAULT_TARGET", "")
 
         self.connected = False
         self.running = False

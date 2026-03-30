@@ -265,27 +265,25 @@ class WebSocketServer:
     async def _handle_parameter_batch(self, data: dict, websocket: WebSocketServerProtocol):
         """批量设置参数 - 高效处理鼠标跟随"""
         params = data.get("params", {})
-        
+
         if not params:
             return
-        
+
         live2d_view = self.sprite_window.live2d_view
         if not live2d_view or not hasattr(live2d_view, 'set_parameter'):
             return
-        
-        # 批量设置参数
-        for param_id, value in params.items():
-            from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+
+        # 🚨 批量收集参数并在循环外一次性处理
+        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+        param_list = [(pid, float(val)) for pid, val in params.items()]
+        for param_id, value in param_list:
             QMetaObject.invokeMethod(
                 self.sprite_window,
                 "set_parameter",
                 Qt.ConnectionType.QueuedConnection,
                 Q_ARG(str, param_id),
-                Q_ARG(float, float(value))
+                Q_ARG(float, value)
             )
-        
-        # 降低日志频率，只在需要时输出
-        # logger.debug(f"✅ Parameters batch set: {len(params)} params")
 
     async def _handle_look_at(self, data: dict, websocket: WebSocketServerProtocol):
         """Handle look_at request - 控制眼神看向指定位置"""

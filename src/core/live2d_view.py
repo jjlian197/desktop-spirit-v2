@@ -123,17 +123,10 @@ class Live2DView(QOpenGLWidget):
         "sleepy": "sleepy",
         # 🚨 新增好感度解锁表情
         "star_eye": "happy",      # 星星眼 → happy
-        "cat_paw": "love",        # 猫爪 → love  
+        "cat_paw": "love",        # 猫爪 → love
         "heart": "love",          # 比心 → love
         "cat_mouth": "love",      # 叼猫条 → love
         "q_style": "happy",       # 变Q → happy
-        "sleepy": "sleepy",
-        # 🚨 新增解锁表情
-        "star_eye": "星星眼",
-        "cat_paw": "猫爪",
-        "heart": "比心",
-        "cat_mouth": "叼猫条",
-        "q_style": "变Q",
     }
     
     # Signal emitted when model is successfully loaded
