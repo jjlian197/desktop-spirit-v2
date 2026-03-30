@@ -4,30 +4,6 @@ WebSocket Server - Remote control interface for Sherry Sprite
 Fixed for proper asyncio event loop handling on macOS
 """
 
-import sys
-# Windows: È«¾ÖÉèÖÃ subprocess ²»ÏÔÊ¾ÖÕ¶Ë´°¿Ú
-if sys.platform == 'win32':
-    import subprocess
-    _startupinfo = subprocess.STARTUPINFO()
-    _startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    _startupinfo.wShowWindow = subprocess.SW_HIDE
-    _original_popen = subprocess.Popen
-    def _hidden_popen(*args, **kwargs):
-        if 'startupinfo' not in kwargs:
-            kwargs['startupinfo'] = _startupinfo
-        if 'creationflags' not in kwargs:
-            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        return _original_popen(*args, **kwargs)
-    subprocess.Popen = _hidden_popen
-    _original_run = subprocess.run
-    def _hidden_run(*args, **kwargs):
-        if 'startupinfo' not in kwargs:
-            kwargs['startupinfo'] = _startupinfo
-        if 'creationflags' not in kwargs:
-            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        return _original_run(*args, **kwargs)
-    subprocess.run = _hidden_run
-
 import asyncio
 import json
 import threading
@@ -61,17 +37,17 @@ class WebSocketServer:
         self.clients = set()
         self._running = False
         
-        # ?? ¡¾´¥¾õ·´À¡¡¿¿çÏß³ÌÏûÏ¢¶ÓÁĞ
+        # ğŸš¨ ã€è§¦è§‰åé¦ˆã€‘è·¨çº¿ç¨‹æ¶ˆæ¯é˜Ÿåˆ—
         self._message_queue = asyncio.Queue()
         
-        # ?? TTS ¿ª¹Ø×´Ì¬
+        # ğŸš¨ TTS å¼€å…³çŠ¶æ€
         self._tts_enabled = True
         
         self.tts_manager: Optional[TTSManager] = None
         if HAS_TTS:
             try:
                 self.tts_manager = get_tts_manager()
-                logger.info("? WebSocket server: TTS manager initialized")
+                logger.info("âœ… WebSocket server: TTS manager initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize TTS manager: {e}")
         self.lip_sync = LipSyncWebSocketBroadcaster(self.tts_manager, self.clients, self.loop)
@@ -80,7 +56,7 @@ class WebSocketServer:
     def set_tts_enabled(self, enabled: bool):
         """Set TTS enabled/disabled state"""
         self._tts_enabled = enabled
-        logger.info(f"??? WebSocket server TTS state: {'enabled' if enabled else 'disabled'}")
+        logger.info(f"ğŸ—£ï¸ WebSocket server TTS state: {'enabled' if enabled else 'disabled'}")
         
     
     def start(self):
@@ -102,9 +78,8 @@ class WebSocketServer:
         self._running = True
 
         async def run():
-            # ?? ¡¾¹Ø¼ü¡¿±£´æÊÂ¼şÑ­»·ÒıÓÃ£¬¹©Ïß³Ì°²È«¹ã²¥Ê¹ÓÃ
+            # ğŸš¨ ä¿å­˜äº‹ä»¶å¾ªç¯å¼•ç”¨ï¼ˆä¾›çº¿ç¨‹å®‰å…¨å¹¿æ’­ä½¿ç”¨ï¼‰
             self.loop = asyncio.get_running_loop()
-            logger.debug(f"WebSocket event loop set: {self.loop}")
             
             try:
                 # Create server without subprotocols (simpler and more compatible)
@@ -116,7 +91,7 @@ class WebSocketServer:
                     ping_timeout=10
                 )
 
-                logger.info(f"? WebSocket server ready on ws://{self.host}:{self.port}")
+                logger.info(f"âœ… WebSocket server ready on ws://{self.host}:{self.port}")
 
                 # Keep running until stopped
                 while self._running:
@@ -201,30 +176,21 @@ class WebSocketServer:
         # Get the live2d view
         live2d_view = self.sprite_window.live2d_view
         
-        # Check if the expression (or its mapping) exists in live2d_view
+        # Check if the expression exists in live2d_view
         actual_name = None
         available = []
         if live2d_view:
             if hasattr(live2d_view, 'get_available_expressions'):
                 available = live2d_view.get_available_expressions()
             
-            # Handle English to Chinese mapping
-            mapped_name = name
-            if hasattr(live2d_view, '_expression_mapping'):
-                # DEBUG: Log the mapping we found
-                mapping = live2d_view._expression_mapping
-                mapped_name = mapping.get(name.lower(), name)
-                logger.info(f"Mapped '{name}' to '{mapped_name}' using mapping of size {len(mapping)}")
-            else:
-                logger.warning("live2d_view does not have _expression_mapping")
-            
+            # ğŸš¨ ç›´æ¥æŸ¥æ‰¾åŸå§‹åç§°ï¼Œä¸åšæ˜ å°„
             if hasattr(live2d_view, 'find_expression'):
-                actual_name = live2d_view.find_expression(mapped_name)
-                logger.info(f"find_expression('{mapped_name}') returned '{actual_name}'")
+                actual_name = live2d_view.find_expression(name)
+                logger.info(f"find_expression('{name}') returned '{actual_name}'")
 
         if not actual_name:
             await self._send_error(websocket, f"Expression '{name}' not found. Available: {available[:10]}...")
-            logger.warning(f"? Expression not found: {name} (tried mapped name: {mapped_name})")
+            logger.warning(f"âŒ Expression not found: {name}")
             return
 
         # Call set_expression on sprite_window (thread-safe)
@@ -241,7 +207,7 @@ class WebSocketServer:
             "actual_name": actual_name,
             "available_expressions": available[:20]
         })
-        logger.info(f"? Expression request processed: {name} -> {actual_name}")
+        logger.info(f"âœ… Expression request processed: {name} -> {actual_name}")
 
     async def _handle_motion(self, data: dict, websocket: WebSocketServerProtocol):
         """Handle motion trigger request"""
@@ -262,7 +228,7 @@ class WebSocketServer:
         logger.info(f"Motion triggered: {group}[{index}]")
 
     async def _handle_parameter(self, data: dict, websocket: WebSocketServerProtocol):
-        """Handle parameter set request (Ö±½ÓÉèÖÃ Live2D ²ÎÊı)"""
+        """Handle parameter set request (ç›´æ¥è®¾ç½® Live2D å‚æ•°)"""
         param_id = data.get("id", data.get("param_id", ""))
         value = data.get("value", 0.0)
         
@@ -276,10 +242,10 @@ class WebSocketServer:
             await self._send_error(websocket, "Live2D view not available")
             return
         
-        # ³¢ÊÔ»ñÈ¡µ±Ç°Öµ
+        # å°è¯•è·å–å½“å‰å€¼
         current_value = live2d_view.get_parameter(param_id)
         
-        # µ÷ÓÃ set_parameter ·½·¨
+        # è°ƒç”¨ set_parameter æ–¹æ³•
         from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
         QMetaObject.invokeMethod(
             self.sprite_window,
@@ -294,10 +260,10 @@ class WebSocketServer:
             "requested_value": value,
             "previous_value": current_value
         })
-        logger.info(f"? Parameter set: {param_id} = {value} (was: {current_value})")
+        logger.info(f"âœ… Parameter set: {param_id} = {value} (was: {current_value})")
 
     async def _handle_parameter_batch(self, data: dict, websocket: WebSocketServerProtocol):
-        """ÅúÁ¿ÉèÖÃ²ÎÊı - ¸ßĞ§´¦ÀíÊó±ê¸úËæ"""
+        """æ‰¹é‡è®¾ç½®å‚æ•° - é«˜æ•ˆå¤„ç†é¼ æ ‡è·Ÿéš"""
         params = data.get("params", {})
         
         if not params:
@@ -307,7 +273,7 @@ class WebSocketServer:
         if not live2d_view or not hasattr(live2d_view, 'set_parameter'):
             return
         
-        # ÅúÁ¿ÉèÖÃ²ÎÊı
+        # æ‰¹é‡è®¾ç½®å‚æ•°
         for param_id, value in params.items():
             from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
             QMetaObject.invokeMethod(
@@ -318,11 +284,11 @@ class WebSocketServer:
                 Q_ARG(float, float(value))
             )
         
-        # ½µµÍÈÕÖ¾ÆµÂÊ£¬Ö»ÔÚĞèÒªÊ±Êä³ö
-        # logger.debug(f"? Parameters batch set: {len(params)} params")
+        # é™ä½æ—¥å¿—é¢‘ç‡ï¼Œåªåœ¨éœ€è¦æ—¶è¾“å‡º
+        # logger.debug(f"âœ… Parameters batch set: {len(params)} params")
 
     async def _handle_look_at(self, data: dict, websocket: WebSocketServerProtocol):
-        """Handle look_at request - ¿ØÖÆÑÛÉñ¿´ÏòÖ¸¶¨Î»ÖÃ"""
+        """Handle look_at request - æ§åˆ¶çœ¼ç¥çœ‹å‘æŒ‡å®šä½ç½®"""
         x = data.get("x", 0.0)
         y = data.get("y", 0.0)
         
@@ -336,7 +302,7 @@ class WebSocketServer:
         )
         
         await self._send_response(websocket, "looking_at", {"x": x, "y": y})
-        logger.info(f"?? Look at: ({x}, {y})")
+        logger.info(f"ğŸ‘€ Look at: ({x}, {y})")
 
     async def _handle_background(self, data: dict, websocket: WebSocketServerProtocol):
         """Handle background change request"""
@@ -345,7 +311,7 @@ class WebSocketServer:
         
         from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
         
-        # ?? ¡¾ĞŞÕı¡¿Í³Ò»µ÷ÓÃ set_background£¬²¢¸ù¾İÂß¼­¹¹Ôì²ÎÊı
+        # ğŸš¨ ã€ä¿®æ­£ã€‘ç»Ÿä¸€è°ƒç”¨ set_backgroundï¼Œå¹¶æ ¹æ®é€»è¾‘æ„é€ å‚æ•°
         final_cmd = bg_type
         if bg_type == "image" and bg_path:
             final_cmd = f"image:{bg_path}"
@@ -358,7 +324,7 @@ class WebSocketServer:
         )
             
         await self._send_response(websocket, "background_set", {"type": final_cmd})
-        logger.info(f"? Background request processed: {final_cmd}")
+        logger.info(f"âœ… Background request processed: {final_cmd}")
     
 
     async def _handle_message(self, data: dict, websocket: WebSocketServerProtocol):
@@ -398,9 +364,9 @@ class WebSocketServer:
             Q_ARG(int, 5000)
         )
 
-        # ?? Check if TTS is enabled
+        # ğŸš¨ Check if TTS is enabled
         if not self._tts_enabled:
-            logger.debug(f"??? TTS is disabled, showing text only: {text[:50]}...")
+            logger.debug(f"ğŸ—£ï¸ TTS is disabled, showing text only: {text[:50]}...")
             # Still show lip sync animation based on text length
             await self._simulate_lip_sync(text)
             await self._send_response(websocket, "speak_completed", {
@@ -413,23 +379,12 @@ class WebSocketServer:
         # Use TTS manager for speech
         if self.tts_manager and HAS_TTS:
             try:
-                # ?? ¡¾¹Ø¼ü¡¿Ëµ»°Ç°»ØÕıÍ·²¿ºÍÉíÌå£¨½ûÓÃÊó±ê¸úËæ£¬³ÖĞø5Ãë£©
-                logger.info("?? TTS: »ØÕıÍ·²¿ºÍÉíÌå£¨5Ãë£©...")
-                QMetaObject.invokeMethod(
-                    self.sprite_window,
-                    "reset_pose",
-                    Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(float, 5000.0)  # 5Ãë
-                )
-                # ¶ÌÔİÑÓ³ÙÈ·±£²ÎÊıÉúĞ§
-                await asyncio.sleep(0.1)
-
                 # Switch provider if requested
                 if provider and provider != self.tts_manager.current_provider.name.lower():
                     available = self.tts_manager.get_available_providers()
                     if provider in available:
                         self.tts_manager.set_provider(provider)
-                        logger.info(f"??? Switched TTS provider to: {provider}")
+                        logger.info(f"ğŸ™ï¸ Switched TTS provider to: {provider}")
 
                 # Generate and play speech
                 result = await self.tts_manager.speak(text, voice)
@@ -441,25 +396,20 @@ class WebSocketServer:
                         "duration_ms": result.duration_ms,
                         "audio_path": result.audio_path
                     })
-                    logger.info(f"? Speak completed: {text[:50]}...")
+                    logger.info(f"âœ… Speak completed: {text[:50]}...")
                 else:
                     await self._send_error(websocket, f"TTS failed: {result.error}")
-                    logger.error(f"? TTS failed: {result.error}")
+                    logger.error(f"âŒ TTS failed: {result.error}")
 
             except Exception as e:
-                logger.error(f"? TTS error: {e}")
+                logger.error(f"âŒ TTS error: {e}")
                 await self._send_error(websocket, f"TTS error: {str(e)}")
         else:
             # Fallback to system say command
             logger.warning("TTS manager not available, using fallback say command")
             import subprocess
-            import sys
             try:
-                # Windows: hide terminal window
-                kwargs = {}
-                if sys.platform == 'win32':
-                    kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-                subprocess.run(["say", text], check=True, capture_output=True, **kwargs)
+                subprocess.run(["say", text], check=True, capture_output=True)
                 await self._send_response(websocket, "speak_completed", {
                     "text": text,
                     "provider": "fallback_say",
@@ -468,6 +418,16 @@ class WebSocketServer:
             except Exception as e:
                 logger.warning(f"Fallback TTS failed: {e}")
                 await self._send_error(websocket, f"TTS unavailable: {str(e)}")
+
+    async def _handle_tts_config(self, data: dict, websocket: WebSocketServerProtocol):
+        """Handle TTS configuration updates"""
+        enabled = data.get("enabled")
+        if enabled is not None:
+            self._tts_enabled = bool(enabled)
+            logger.info(f"ğŸ—£ï¸ TTS {'enabled' if self._tts_enabled else 'disabled'} via WebSocket")
+            await self._send_response(websocket, "tts_config_updated", {
+                "tts_enabled": self._tts_enabled
+            })
 
     async def _handle_status(self, websocket: WebSocketServerProtocol):
         """Handle status request"""
@@ -560,25 +520,14 @@ class WebSocketServer:
         except Exception as e:
             logger.error(f"Failed to send error: {e}")
 
-    async def _handle_tts_config(self, data: dict, websocket: WebSocketServerProtocol):
-        """Handle TTS configuration updates"""
-        enabled = data.get("enabled")
-        if enabled is not None:
-            self._tts_enabled = bool(enabled)
-            logger.info(f"??? TTS {'enabled' if self._tts_enabled else 'disabled'} via WebSocket")
-            await self._send_response(websocket, "tts_config_updated", {
-                "tts_enabled": self._tts_enabled
-            })
-
     async def _simulate_lip_sync(self, text: str):
         """Simulate lip sync animation when TTS is disabled"""
         import asyncio
-        import math
         # Estimate duration based on text length (roughly 5 chars per second)
         duration_ms = max(1000, len(text) * 200)
         duration_sec = duration_ms / 1000
         
-        logger.debug(f"?? Simulating lip sync for {duration_sec:.1f}s")
+        logger.debug(f"ğŸ­ Simulating lip sync for {duration_sec:.1f}s")
         
         # Simulate mouth opening/closing
         start_time = asyncio.get_event_loop().time()
@@ -588,6 +537,7 @@ class WebSocketServer:
                 break
             
             # Create a simple oscillating mouth value (0.0 - 0.7)
+            import math
             value = 0.3 + 0.4 * math.sin(elapsed * 10)
             
             # Broadcast to clients
@@ -620,24 +570,19 @@ class WebSocketServer:
             logger.debug(f"Failed to broadcast lip sync: {e}")
 
     def broadcast_sync(self, msg_type: str, data: dict):
-        """?? ¡¾´¥¾õ·´À¡¡¿Ïß³Ì°²È«µÄ¹ã²¥·½·¨£¨¹© Qt Ïß³Ìµ÷ÓÃ£©"""
-        import threading
-        current_loop = getattr(self, 'loop', None)
-        
-        if current_loop and current_loop.is_running():
-            # Ê¹ÓÃ run_coroutine_threadsafe ½«ÈÎÎñÌá½»µ½ asyncio ÊÂ¼şÑ­»·
+        """ğŸš¨ ã€è§¦è§‰åé¦ˆã€‘çº¿ç¨‹å®‰å…¨çš„å¹¿æ’­æ–¹æ³•ï¼ˆä¾› Qt çº¿ç¨‹è°ƒç”¨ï¼‰"""
+        if self.loop and self.loop.is_running():
+            # ä½¿ç”¨ call_soon_threadsafe å°†ä»»åŠ¡æäº¤åˆ° asyncio äº‹ä»¶å¾ªç¯
             future = asyncio.run_coroutine_threadsafe(
                 self.broadcast(msg_type, data), 
-                current_loop
+                self.loop
             )
             try:
-                future.result(timeout=1.0)  # µÈ´ı×î¶à1Ãë
+                future.result(timeout=1.0)  # ç­‰å¾…æœ€å¤š1ç§’
             except Exception as e:
                 logger.debug(f"Broadcast sync error: {e}")
         else:
-            # ?? Èç¹û loop »¹Ã»×¼±¸ºÃ£¬ÑÓ³ÙÖØÊÔ
-            logger.debug(f"WebSocket loop not ready, queuing broadcast: {msg_type}")
-            threading.Timer(0.5, lambda: self.broadcast_sync(msg_type, data)).start()
+            logger.warning("WebSocket loop not running, cannot broadcast")
 
     async def broadcast(self, msg_type: str, data: dict):
         """Broadcast message to all connected clients"""
@@ -646,7 +591,7 @@ class WebSocketServer:
             return
 
         message = json.dumps({"type": msg_type, "data": data})
-        logger.info(f"?? Broadcasting to {len(self.clients)} clients: {msg_type}")
+        logger.info(f"ğŸ“¢ Broadcasting to {len(self.clients)} clients: {msg_type}")
         disconnected = set()
 
         for client in self.clients:

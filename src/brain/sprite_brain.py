@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import time
 import psutil
 from datetime import datetime
@@ -26,6 +27,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("SpriteBrain")
+
+# 🚨 名字检测正则（词边界匹配，避免"雪莉白"等误触发）
+_name_pattern = re.compile(r'\b(雪莉|Sherry|sherry)\b')
 
 class SpriteBrain:
     def __init__(self, ws_uri="ws://127.0.0.1:8765/sprite", http_port=8766):
@@ -794,8 +798,8 @@ class SpriteBrain:
                 user_message = cmd_data.get("message", "")
                 logger.info(f"🎤 收到语音输入: {user_message}")
 
-                # 检测是否叫雪莉的名字
-                if any(name in user_message for name in ["雪莉", "Sherry", "sherry"]):
+                # 检测是否叫雪莉的名字（词边界匹配，避免"雪莉白"等误触发）
+                if _name_pattern.search(user_message):
                     await self.set_expression("happy")
                     await self.speak("主人我听到了！")
                     return web.json_response({"success": True, "message": "Response sent"})

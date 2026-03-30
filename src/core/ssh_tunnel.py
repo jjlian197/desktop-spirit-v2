@@ -107,6 +107,7 @@ class SSHTunnelManager:
                     if self.config.ssh_key and os.path.exists(self.config.ssh_key):
                         connect_kwargs["key_filename"] = self.config.ssh_key
                     elif self.config.ssh_password:
+                        logger.warning("⚠️ 使用密码认证 SSH 不安全，建议使用 SSH 密钥！")
                         connect_kwargs["password"] = self.config.ssh_password
                     
                     client.connect(**connect_kwargs)
