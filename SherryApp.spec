@@ -57,6 +57,8 @@ a = Analysis(
         'faster_whisper',
         'pyaudio',
         'cffi',
+        # GPT-SoVITS
+        'gpt_sovits_provider',
         # 其他
         'numpy',
         'yaml',
@@ -90,7 +92,7 @@ exe = EXE(
     upx=True,
     console=False,  # 生产环境设为 False
     disable_windowed_traceback=False,
-    argv_emulation=False,  # macOS app bundle 建议设为 False
+    argv_emulation=False,  # 🚨 必须为 False，否则会导致无限重启
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,

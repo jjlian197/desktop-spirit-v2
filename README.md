@@ -13,8 +13,10 @@
 - **Live2D 渲染**: 基于 PyQt6 OpenGL 的 Live2D Cubism 模型渲染
 - **WebSocket 控制中枢**: 提供外部控制接口，支持表情、动作、语音控制
 - **智能大脑 (Sprite Brain)**: 鼠标跟随、情绪引擎、触觉反馈、自主行为
-- **TTS 语音系统**: 支持多种 TTS 引擎 (Edge TTS, macOS say 等)
+- **TTS 语音系统**: 支持多种 TTS 引擎 (Edge TTS, GPT-SoVITS, macOS say 等)
+- **STT 语音识别**: 基于 faster-whisper 的本地离线语音识别
 - **唇形同步**: 根据语音自动同步 Live2D 模型口型
+- **Agent Bridge**: 与 OpenClaw Agent CLI 通信桥接
 
 ---
 
@@ -27,7 +29,9 @@
 | OpenGL | PyOpenGL | 模型渲染 |
 | WebSocket | websockets | 双向通信 |
 | HTTP API | aiohttp | 大脑 HTTP 接口 |
-| TTS | edge-tts / pyttsx3 | 语音合成 |
+| TTS | edge-tts / GPT-SoVITS / pyttsx3 | 语音合成 |
+| STT | faster-whisper + PyAudio | 本地离线语音识别 |
+| Agent Bridge | subprocess (openclaw CLI) | OpenClaw Agent 通信 |
 | 日志 | loguru | 结构化日志 |
 | 配置 | YAML | config.yaml |
 
@@ -40,17 +44,22 @@ sherry-desktop-sprite/
 ├── src/
 │   ├── main.py                 # 入口点
 │   ├── app.py                  # 主应用程序，启动所有组件
+│   ├── launcher.py             # 打包后启动器（含 GPT-SoVITS 初始化）
 │   ├── core/                   # 核心渲染与服务
 │   │   ├── sprite_window.py    # PyQt6 主窗口（透明、置顶、触摸事件）
 │   │   ├── live2d_view.py      # Live2D OpenGL 渲染
 │   │   ├── websocket_server.py # WebSocket 服务端
 │   │   ├── tts_manager.py      # TTS 管理器（多引擎支持）
+│   │   ├── stt_manager.py      # STT 管理器（Whisper 本地识别）
+│   │   ├── gpt_sovits_provider.py # GPT-SoVITS 语音合成
 │   │   ├── motion_player.py    # 动作播放器
-│   │   └── lip_sync_websocket.py # 唇形同步广播
+│   │   ├── lip_sync_websocket.py # 唇形同步广播
+│   │   └── ssh_tunnel.py       # SSH 隧道工具
 │   ├── brain/                  # 精灵大脑（智能行为）
 │   │   ├── sprite_brain.py     # 大脑主循环（鼠标跟随、情绪、HTTP API）
 │   │   ├── mood_engine.py      # 情绪与好感度引擎
-│   │   └── soul.py             # 台词库与灵魂回复
+│   │   ├── soul.py             # 台词库与灵魂回复
+│   │   └── agent_bridge.py     # OpenClaw Agent 通信桥
 │   ├── ui/                     # UI 组件
 │   │   └── bubble_widget.py    # 消息气泡
 │   ├── utils/                  # 工具类
@@ -69,6 +78,7 @@ sherry-desktop-sprite/
 │   └── DEPLOY.md               # 部署指南
 ├── config.yaml                 # 配置文件
 ├── requirements.txt            # Python 依赖
+├── SherryApp.spec             # PyInstaller 打包配置
 └── start_sherry.sh             # 一键启动脚本
 ```
 
@@ -150,12 +160,22 @@ tail -f ~/.sherry/sprite.log               # 查看日志
 # 激活虚拟环境
 source venv/bin/activate
 
-# 启动主程序
-python -m src.main
+# 启动主程序（推荐，自动初始化 GPT-SoVITS）
+python src/launcher.py
+
+# 跳过 GPT-SoVITS 初始化
+SHERRY_NO_LAUNCHER=1 python src/launcher.py
 
 # 或分别启动
 python src/main.py                          # 仅启动精灵本体
 python src/brain/sprite_brain.py            # 仅启动大脑
+```
+
+### 打包应用运行 (macOS)
+
+```bash
+# 打包后，应用会使用 src/launcher.py 作为入口
+open SherryApp.app
 ```
 
 ---
@@ -184,6 +204,10 @@ python src/brain/sprite_brain.py            # 仅启动大脑
 | `look_at` | 眼神看向 | `{"x": 0.5, "y": -0.3}` |
 | `message` | 显示气泡 | `{"text": "Hello", "duration": 5000}` |
 | `get_status` | 获取状态 | `{}` |
+| `stt_start` | 开始语音识别 | `{"language": "zh"}` |
+| `stt_stop` | 停止语音识别 | `{}` |
+| `agent_bridge_toggle` | 开关 Agent Bridge | `{"enabled": true}` |
+| `tts` | TTS 控制 | `{"action": "toggle"}` |
 
 ### HTTP API (大脑提供)
 
@@ -300,9 +324,32 @@ mouse_config = {
 ### 5. TTSManager (`src/core/tts_manager.py`)
 
 语音管理器：
-- 多引擎支持: Edge TTS (默认), ElevenLabs, macOS say
+- 多引擎支持: Edge TTS (默认), ElevenLabs, GPT-SoVITS, macOS say
 - 唇形同步信号: `lip_sync_frame` (0.0-1.0)
 - 音频缓存与播放
+
+### 6. STTManager (`src/core/stt_manager.py`)
+
+本地语音识别管理器：
+- 基于 faster-whisper 的完全离线识别
+- 支持语言: 中文 (zh)、英文 (en)、日文 (ja)
+- PyAudio 实时录音
+- 音频能量检测过滤噪声
+
+### 7. AgentBridge (`src/brain/agent_bridge.py`)
+
+OpenClaw Agent 通信桥：
+- 通过 openclaw CLI 与 OpenClaw Agent 通信
+- 支持 telegram 渠道消息发送
+- 健康检查线程监控 Agent 在线状态
+- 触摸反馈、心情变化、说话内容自动上报
+
+### 8. GPT-SoVITS 集成 (`src/core/gpt_sovits_provider.py`, `src/launcher.py`)
+
+高质量语音合成：
+- 通过 SSH 隧道连接远程 GPT-SoVITS 服务
+- 支持日文参考音频克隆音色
+- Launcher 自动建立 SSH 隧道 (ssh -N -L 9880:127.0.0.1:9880 pc)
 
 ---
 
@@ -408,6 +455,27 @@ pip install edge-tts
 edge-tts --version
 ```
 
+### 5. GPT-SoVITS 连接失败
+
+确保 SSH 隧道已建立：
+```bash
+ssh -N -L 9880:127.0.0.1:9880 pc
+```
+
+### 6. STT 语音识别无响应
+
+检查 PyAudio 和 faster-whisper 安装：
+```bash
+pip install pyaudio faster-whisper
+```
+
+### 7. Agent Bridge 无法连接
+
+确保 openclaw CLI 已安装并配置：
+```bash
+openclaw agent --ping
+```
+
 ---
 
 ## 安全注意事项 (Security)
@@ -440,7 +508,7 @@ class MyTTSProvider(BaseTTSProvider):
     async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
         # 实现语音生成
         pass
-    
+
     def is_available(self) -> bool:
         # 检查依赖是否安装
         pass
@@ -457,6 +525,35 @@ async def on_llm_response(self, text: str):
     await self.speak(text)
 ```
 
+### 使用 Agent Bridge
+
+Agent Bridge 提供与 OpenClaw Agent 的通信能力：
+
+```python
+from src.brain.agent_bridge import create_agent_bridge
+
+bridge = create_agent_bridge()
+bridge.connect()
+
+# 发送触摸反馈
+bridge.send_touch_feedback("head", "tap", "happy", 75, "好舒服~")
+
+# 发送状态报告
+bridge.send_status_report("happy", 75, "开心", False, True)
+```
+
+Agent Bridge 默认关闭，需要通过 WebSocket 命令启用：
+```json
+{"type": "agent_bridge_toggle", "data": {"enabled": true}}
+```
+
+### 配置 GPT-SoVITS
+
+GPT-SoVITS 需要通过 SSH 隧道连接远程服务器。Launcher 会自动：
+1. 检查 SSH 命令可用性
+2. 建立 SSH 隧道 (`ssh -N -L 9880:127.0.0.1:9880 pc`)
+3. 设置环境变量供 TTS Manager 使用
+
 ---
 
 ## 资源链接
@@ -469,4 +566,4 @@ async def on_llm_response(self, text: str):
 
 *Made with 💜 for Master*
 
-*最后更新: 2026-03-02*
+*最后更新: 2026-03-29*
