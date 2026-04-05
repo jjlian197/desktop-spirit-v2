@@ -22,6 +22,7 @@ import subprocess
 import wave
 import struct
 import platform
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Callable, List, Dict, Any
@@ -107,8 +108,19 @@ class EdgeTTSProvider(BaseTTSProvider):
         self.voice = voice or self.DEFAULT_VOICE
         self.rate = rate
         self.pitch = pitch
+        self._edge_tts_cmd = None
+        self._initialized = False
+        # 异步检测，不阻塞主线程
+        threading.Thread(target=self._detect_edge_tts, daemon=True).start()
+
+    def _detect_edge_tts(self):
+        """后台线程检测 edge-tts"""
         self._edge_tts_cmd = self._find_edge_tts()
         self._initialized = self._edge_tts_cmd is not None
+        if self._initialized:
+            logger.info(f"✅ EdgeTTS 检测完成: {self._edge_tts_cmd}")
+        else:
+            logger.warning("⚠️ EdgeTTS 检测失败")
     
     def _find_edge_tts(self) -> Optional[str]:
         """Find edge-tts executable (venv, PyInstaller bundle, or system PATH)"""
@@ -361,28 +373,38 @@ class LocalTTSProvider(BaseTTSProvider):
     def __init__(self):
         super().__init__("LocalTTS")
         self._platform = get_system()
-        self._initialized = self._check_availability()
-    
-    def _check_availability(self) -> bool:
-        """Check if local TTS is available"""
+        self._initialized = False
+        # 异步检测，不阻塞主线程
+        threading.Thread(target=self._detect_availability, daemon=True).start()
+
+    def _detect_availability(self):
+        """后台线程检测 local TTS 可用性"""
+        self._initialized = self._check_availability_sync()
+        if self._initialized:
+            logger.info(f"✅ LocalTTS 检测完成 ({self._platform})")
+        else:
+            logger.warning(f"⚠️ LocalTTS 检测失败 ({self._platform})")
+
+    def _check_availability_sync(self) -> bool:
+        """同步检测 local TTS 可用性"""
         if self._platform == 'Darwin':
             try:
-                subprocess.run(["say", "-v", "?"], 
+                subprocess.run(["say", "-v", "?"],
                              capture_output=True, check=True)
                 logger.info("✅ LocalTTS available (macOS say)")
                 return True
             except:
                 return False
-        
+
         elif self._platform == 'Linux':
             try:
-                subprocess.run(["which", "espeak"], 
+                subprocess.run(["which", "espeak"],
                              capture_output=True, check=True)
                 logger.info("✅ LocalTTS available (Linux espeak)")
                 return True
             except:
                 return False
-        
+
         else:  # Windows
             try:
                 import pyttsx3
@@ -628,14 +650,14 @@ class TTSManager(QObject):
     
     def __init__(self, parent=None, preferred_provider: str = "edge"):
         super().__init__(parent)
-        
-        # Initialize providers
+
+        # Initialize providers (异步检测，不阻塞)
         self.providers: Dict[str, BaseTTSProvider] = {
             "edge": EdgeTTSProvider(),
             "elevenlabs": ElevenLabsProvider(),
             "local": LocalTTSProvider(),
         }
-        
+
         # 🎙️ GPT-SoVITS Proxy 多音色版本
         if HAS_GPT_SOVITS:
             try:
@@ -643,13 +665,14 @@ class TTSManager(QObject):
                 logger.info("✅ TTSManager: GPT-SoVITS-Proxy 已加载")
             except Exception as e:
                 logger.warning(f"⚠️ TTSManager: GPT-SoVITS-Proxy 加载失败: {e}")
-        
-        self.current_provider = self._select_provider(preferred_provider)
+
+        self.current_provider = None  # 延迟选择，等 provider 检测完成
+        self._preferred_provider = preferred_provider
         self.audio_analyzer = AudioAnalyzer(frame_rate=30)
-        
+
         # 🌐 当前语言 (默认中文)
         self._current_language = "zh"
-        
+
         # 🌐 翻译器 (用于中日互译)
         try:
             from src.core.translator import get_translator
@@ -658,21 +681,38 @@ class TTSManager(QObject):
         except Exception as e:
             logger.warning(f"⚠️ TTSManager: 翻译器加载失败: {e}")
             self._translator = None
-        
+
         # Playback state
         self._is_speaking = False
         self._current_audio_path: Optional[str] = None
         self._amplitude_data: List[float] = []
         self._current_frame = 0
         self._temp_files: List[str] = []
-        
+
         # Timer for lip sync (30fps)
         self._playback_timer = QTimer(self)
         self._playback_timer.timeout.connect(self._on_playback_frame)
-        
-        logger.info(f"🎙️ TTSManager initialized: {self.current_provider.name}")
 
-        # 🚀 检查并自动启动 GPT-SoVITS-Proxy
+        # 🚀 异步初始化：等 provider 检测完成后选择 provider 并启动 proxy
+        threading.Thread(target=self._delayed_init, daemon=True).start()
+
+    def _delayed_init(self):
+        """后台线程执行耗时初始化"""
+        # 等待 provider 检测完成（最多 3 秒）
+        for _ in range(30):
+            time.sleep(0.1)
+            all_ready = all(p._initialized for p in self.providers.values() if hasattr(p, '_initialized'))
+            if all_ready:
+                break
+
+        # 选择 provider
+        self.current_provider = self._select_provider(self._preferred_provider)
+        if self.current_provider:
+            logger.info(f"🎙️ TTSManager initialized: {self.current_provider.name}")
+        else:
+            logger.warning("⚠️ TTSManager: 没有可用的 TTS provider")
+
+        # 检查并启动 GPT-SoVITS-Proxy
         self._ensure_proxy_running()
 
     def _ensure_proxy_running(self):
@@ -845,9 +885,20 @@ class TTSManager(QObject):
             logger.warning("TTS in progress, waiting...")
             while self._is_speaking:
                 await asyncio.sleep(0.1)
-        
+
+        # 等待 provider 初始化完成（最多 3 秒）
+        if self.current_provider is None:
+            logger.info("⏳ TTS provider 还在初始化，等待...")
+            wait_count = 0
+            while self.current_provider is None and wait_count < 30:
+                await asyncio.sleep(0.1)
+                wait_count += 1
+
+            if self.current_provider is None:
+                return TTSResult("", text, 0, 44100, False, "TTS provider 未就绪")
+
         self._is_speaking = True
-        
+
         # 🌐 日语模式：自动翻译中文台词
         original_text = text
         if self._current_language == "jp" and self._translator:

@@ -379,8 +379,10 @@ class WebSocketServer:
         # Use TTS manager for speech
         if self.tts_manager and HAS_TTS:
             try:
+                current_provider_name = self.tts_manager.current_provider.name.lower() if self.tts_manager.current_provider else ""
+
                 # Switch provider if requested
-                if provider and provider != self.tts_manager.current_provider.name.lower():
+                if provider and provider != current_provider_name:
                     available = self.tts_manager.get_available_providers()
                     if provider in available:
                         self.tts_manager.set_provider(provider)
@@ -392,7 +394,7 @@ class WebSocketServer:
                 if result.success:
                     await self._send_response(websocket, "speak_completed", {
                         "text": text,
-                        "provider": self.tts_manager.current_provider.name,
+                        "provider": self.tts_manager.current_provider.name if self.tts_manager.current_provider else "unknown",
                         "duration_ms": result.duration_ms,
                         "audio_path": result.audio_path
                     })

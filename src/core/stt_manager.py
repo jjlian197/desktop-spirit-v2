@@ -7,6 +7,7 @@ Sherry STT Manager - Whisper 本地语音识别
 import logging
 import os
 import threading
+import time
 import wave
 from typing import Optional, Callable, Dict
 
@@ -24,6 +25,7 @@ class STTManager:
         self.is_listening = False
         self._stop_event = threading.Event()
         self._listen_thread: Optional[threading.Thread] = None
+        self._model_loading = False  # 模型加载中标志
 
         self.on_transcript: Optional[Callable[[str, bool], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
@@ -33,18 +35,20 @@ class STTManager:
         self._check_dependencies()
 
     def _check_dependencies(self):
-        """检查依赖"""
+        """检查依赖，不阻塞加载模型"""
         try:
             from faster_whisper import WhisperModel
-            logger.info("✅ faster-whisper 已安装")
-            self._load_model()
+            logger.info("✅ faster-whisper 已安装，异步加载模型...")
+            # 异步加载模型，不阻塞
+            threading.Thread(target=self._load_model, daemon=True).start()
         except ImportError as e:
             logger.error(f"❌ 缺少 faster-whisper: {e}")
             if self.on_error:
                 self.on_error("请安装: pip install faster-whisper")
 
     def _load_model(self):
-        """加载 Whisper 模型"""
+        """后台线程加载 Whisper 模型"""
+        self._model_loading = True
         try:
             from faster_whisper import WhisperModel
             # 使用 base 模型，平衡速度和准确率
@@ -54,6 +58,8 @@ class STTManager:
             logger.error(f"❌ 模型加载失败: {e}")
             if self.on_error:
                 self.on_error(f"模型加载失败: {e}")
+        finally:
+            self._model_loading = False
 
     def set_language(self, language: str) -> bool:
         """设置识别语言"""
@@ -82,6 +88,18 @@ class STTManager:
         """开始监听"""
         if self.is_listening:
             return False
+
+        # 等待模型加载完成（最多 10 秒）
+        if self._model is None and not self._model_loading:
+            if self.on_error:
+                self.on_error("Whisper 模型未加载")
+            return False
+
+        # 等待模型加载
+        wait_count = 0
+        while self._model is None and self._model_loading and wait_count < 100:
+            time.sleep(0.1)
+            wait_count += 1
 
         if not self._model:
             if self.on_error:
@@ -129,7 +147,7 @@ class STTManager:
         CHANNELS = 1
         RATE = 16000
         RECORD_SECONDS = 5
-        ENERGY_THRESHOLD = 1000  # 能量阈值，低于此值视为噪声（调高减少误触发）
+        ENERGY_THRESHOLD = 300  # 能量阈值，低于此值视为噪声
 
         try:
             logger.info("🎤 初始化 PyAudio...")

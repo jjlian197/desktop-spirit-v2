@@ -329,9 +329,10 @@ class SherrySpriteWindow(QMainWindow):
         provider_menu = tts_menu.addMenu("选择引擎")
         if HAS_TTS and self.tts_manager:
             available = self.tts_manager.get_available_providers()
+            current_name = self.tts_manager.current_provider.name.lower() if self.tts_manager.current_provider else ""
             for provider_name in available:
                 action = QAction(provider_name.title(), self)
-                is_current = self.tts_manager.current_provider.name.lower() == provider_name
+                is_current = current_name == provider_name
                 action.setCheckable(True)
                 action.setChecked(is_current)
                 action.triggered.connect(lambda checked, p=provider_name: self._switch_tts_provider(p))
@@ -841,9 +842,12 @@ class SherrySpriteWindow(QMainWindow):
 
         if checked:
             # 开始监听
-            self.stt_manager.start_listening()
-            self._stt_listening = True
-            self.show_message("🎤 在听你说...", 2000)
+            if self.stt_manager.start_listening():
+                self._stt_listening = True
+                self.show_message("🎤 在听你说...", 2000)
+            else:
+                self._stt_listening = False
+                self.show_message("❌ STT 启动失败", 2000)
             # 雪莉看向主人（假设主人在屏幕中央）
             self.set_expression("happy")
             logger.info("🎤 STT 监听已启动")
