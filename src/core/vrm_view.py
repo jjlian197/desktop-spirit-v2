@@ -18,7 +18,7 @@ from loguru import logger
 
 try:
     from PyQt6.QtWebEngineWidgets import QWebEngineView
-    from PyQt6.QtWebEngineCore import QWebEngineSettings
+    from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
     from PyQt6.QtWebChannel import QWebChannel
     HAS_VRM_WEBENGINE = True
 except ImportError as e:
@@ -45,6 +45,11 @@ class VrmBridge(QObject):
     @pyqtSlot()
     def emitReady(self):
         self.ready.emit()
+
+
+class LoggingWebPage(QWebEnginePage):
+    def javaScriptConsoleMessage(self, level, message, line_number, source_id):
+        logger.info(f"VRM console[{level.name}] {source_id}:{line_number} {message}")
 
 
 class VrmView(QWidget):
@@ -78,6 +83,8 @@ class VrmView(QWidget):
         self._pending_model_url: Optional[str] = None
 
         self.web = QWebEngineView(self)
+        self.page = LoggingWebPage(self.web)
+        self.web.setPage(self.page)
         self.web.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.web.page().setBackgroundColor(QColor(0, 0, 0, 0))
         self.web.settings().setAttribute(

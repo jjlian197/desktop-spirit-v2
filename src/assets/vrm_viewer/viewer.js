@@ -42,6 +42,85 @@ let bigHead = false;
 let eyeTracking = true;
 let baseHeadScale = null;
 
+function fitObjectToView(object3d) {
+  const box = new THREE.Box3().setFromObject(object3d);
+  if (box.isEmpty()) return;
+
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 0.001);
+  const targetHeight = 2.6;
+  const scale = targetHeight / Math.max(size.y, 0.001);
+
+  object3d.scale.multiplyScalar(scale);
+
+  const scaledBox = new THREE.Box3().setFromObject(object3d);
+  const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
+  const scaledSize = scaledBox.getSize(new THREE.Vector3());
+
+  object3d.position.sub(scaledCenter);
+  object3d.position.y -= scaledBox.min.y;
+  object3d.position.y -= scaledSize.y * 0.02;
+
+  controls.target.set(0, scaledSize.y * 0.52, 0);
+  camera.position.set(0, scaledSize.y * 0.56, Math.max(3.2, maxDim * scale * 1.9));
+  camera.near = 0.01;
+  camera.far = Math.max(200, camera.position.length() * 8);
+  camera.updateProjectionMatrix();
+}
+
+function normalizeMaterials(rootObject) {
+  let meshCount = 0;
+  rootObject.traverse((obj) => {
+    if (!obj.isMesh) return;
+    meshCount += 1;
+    obj.frustumCulled = false;
+    obj.castShadow = false;
+    obj.receiveShadow = false;
+
+    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+    materials.forEach((material) => {
+      if (!material) return;
+      const name = (material.name || '').toLowerCase();
+      const isHairLike =
+        name.includes('hair') ||
+        name.includes('bang') ||
+        name.includes('fx') ||
+        name.includes('eye');
+      const isBodyLike =
+        name.includes('face') ||
+        name.includes('up01') ||
+        name.includes('down01') ||
+        name.includes('item');
+
+      material.side = THREE.DoubleSide;
+      material.depthTest = true;
+      material.depthWrite = true;
+      material.premultipliedAlpha = false;
+
+      if (isHairLike) {
+        material.transparent = false;
+        material.opacity = 1.0;
+        material.alphaTest = Math.max(material.alphaTest || 0, 0.35);
+      } else if (isBodyLike) {
+        material.transparent = false;
+        material.opacity = 1.0;
+        material.alphaTest = 0.0;
+        material.alphaMap = null;
+      } else if (material.alphaMap) {
+        material.transparent = true;
+        material.alphaTest = Math.max(material.alphaTest || 0, 0.12);
+      } else {
+        material.transparent = false;
+        material.alphaTest = 0.0;
+      }
+
+      material.needsUpdate = true;
+    });
+  });
+  console.info('Normalized meshes:', meshCount);
+}
+
 new QWebChannel(qt.webChannelTransport, (channel) => {
   bridge = channel.objects.vrmBridge;
   bridge.emitReady();
@@ -195,17 +274,19 @@ async function loadModel(url) {
       VRMUtils.removeUnnecessaryVertices(gltf.scene);
       VRMUtils.removeUnnecessaryJoints(gltf.scene);
       currentVrm = vrm;
+      normalizeMaterials(currentVrm.scene);
       currentVrm.scene.rotation.y = Math.PI;
-      currentVrm.scene.position.y = -0.95;
+      fitObjectToView(currentVrm.scene);
       scene.add(currentVrm.scene);
     } else {
-      gltf.scene.position.y = -0.95;
-      gltf.scene.scale.setScalar(1.2);
+      normalizeMaterials(gltf.scene);
+      fitObjectToView(gltf.scene);
       scene.add(gltf.scene);
       fallback = gltf.scene;
     }
     mixer = gltf.animations.length ? new THREE.AnimationMixer(gltf.scene) : null;
     if (mixer) mixer.clipAction(gltf.animations[0]).play();
+    console.info('Loaded model:', url);
   } catch (error) {
     console.error('Failed to load VRM/GLTF:', error);
     createFallback();

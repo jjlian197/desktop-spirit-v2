@@ -23,7 +23,7 @@ sprite:
 
   # VRM/Three.js renderer path. Put a Blender-exported .vrm/.glb/.gltf here.
   vrm:
-    path: "src/assets/models/vrm"
+    path: "src/assets/models/vrm/鸣潮-爱弥斯.glb"
     
 # TTS Configuration
 tts:
