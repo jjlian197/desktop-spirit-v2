@@ -21,6 +21,11 @@ try:
 except ImportError:
     HAS_LIVE2D = False
 
+try:
+    from src.core.vrm_view import VrmView, HAS_VRM_WEBENGINE
+except ImportError:
+    HAS_VRM_WEBENGINE = False
+
 # Import resource path utility
 try:
     from src.utils import get_resource_path
@@ -125,6 +130,7 @@ class SherrySpriteWindow(QMainWindow):
 
         self.drag_position = None
         self.bubble_widget = None
+        self.renderer_mode = self._load_renderer_mode()
         self.is_click_through = False
         self.is_big_head = False
         self._watermark_enabled = False
@@ -174,6 +180,57 @@ class SherrySpriteWindow(QMainWindow):
        
         # Keep top-level window undecorated/translucent; background is painted by central_widget.
 
+    def _load_renderer_mode(self) -> str:
+        """Read the preferred character renderer from config.yaml."""
+        try:
+            import yaml
+            config_path = Path(get_resource_path("config.yaml"))
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                renderer = data.get("sprite", {}).get("renderer", "live2d")
+                return str(renderer).strip().lower()
+        except Exception as e:
+            logger.warning(f"Failed to read renderer config, using Live2D: {e}")
+        return "live2d"
+
+    def _load_model_path_for_renderer(self) -> str:
+        """Read the model path for the active renderer."""
+        try:
+            import yaml
+            config_path = Path(get_resource_path("config.yaml"))
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                sprite = data.get("sprite", {})
+                if self.renderer_mode == "vrm":
+                    vrm_path = sprite.get("vrm", {}).get("path")
+                    if vrm_path:
+                        return get_resource_path(vrm_path)
+                model_path = sprite.get("model", {}).get("path")
+                if model_path:
+                    return get_resource_path(model_path)
+        except Exception as e:
+            logger.warning(f"Failed to read model path config: {e}")
+
+        if self.renderer_mode == "vrm":
+            return get_resource_path("src/assets/models/vrm")
+        return get_resource_path("src/assets/models/hanamaru")
+
+    def _create_vrm_view(self):
+        if not HAS_VRM_WEBENGINE:
+            logger.error("VRM renderer requested but PyQt6-WebEngine is not installed")
+            return None
+        view = VrmView(self.central_widget)
+        view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        view.model_loaded.connect(self._auto_remove_watermark)
+        view.touched.connect(self._on_touched)
+        model_path = self._load_model_path_for_renderer()
+        logger.info(f"Loading VRM model from: {model_path}")
+        success = view.load_model(model_path)
+        logger.info(f"VRM model load result: {success}")
+        return view
+
     def _setup_ui(self):
         # 创建主容器
         self.central_widget = QFrame()
@@ -189,8 +246,18 @@ class SherrySpriteWindow(QMainWindow):
 
         # 🚨 【关键】创建 Live2D 视图（必须在背景之前创建，以便背景可以设为它的 sibling）
         self.live2d_view = None
-        logger.info(f"🔍 HAS_LIVE2D = {HAS_LIVE2D}")
-        if HAS_LIVE2D:
+        logger.info(f"Character renderer mode: {self.renderer_mode}")
+        if self.renderer_mode == "vrm":
+            try:
+                self.live2d_view = self._create_vrm_view()
+                if self.live2d_view:
+                    layout.addWidget(self.live2d_view)
+                    logger.info("VRM view created and added to layout")
+            except Exception as e:
+                logger.error(f"Failed to initialize VRM renderer: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        elif HAS_LIVE2D:
             try:
                 logger.info("🎨 Creating Live2DView...")
                 self.live2d_view = Live2DView(self.central_widget)
@@ -204,7 +271,7 @@ class SherrySpriteWindow(QMainWindow):
                 self.live2d_view.touched.connect(self._on_touched)
                 
                 # 加载模型 - 使用 get_resource_path 确保打包后路径正确
-                model_path = get_resource_path("src/assets/models/hanamaru")
+                model_path = self._load_model_path_for_renderer()
                 logger.info(f"📂 Loading model from: {model_path}")
                 
                 # 检查路径是否存在

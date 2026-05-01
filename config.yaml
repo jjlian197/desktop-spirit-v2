@@ -1,6 +1,8 @@
 # Sprite configuration
 sprite:
   name: "Sherry"
+  # Renderer options: live2d, vrm
+  renderer: "vrm"
   window:
     width: 400
     height: 600
@@ -18,6 +20,10 @@ sprite:
   model:
     path: "src/assets/models/hanamaru"
     default_expression: "normal"
+
+  # VRM/Three.js renderer path. Put a Blender-exported .vrm/.glb/.gltf here.
+  vrm:
+    path: "src/assets/models/vrm"
     
 # TTS Configuration
 tts:

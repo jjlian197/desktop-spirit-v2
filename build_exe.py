@@ -117,6 +117,7 @@ def main():
         "--icon", str(icon_ico),
         # 添加数据文件 (模型、资源等)
         "--add-data", f"{assets_dir};src/assets",
+        "--add-data", f"{project_dir / 'config.yaml'};.",
         # 隐藏导入
         "--hidden-import", "PyQt6.sip",
         "--hidden-import", "PyQt6.QtCore",
@@ -124,6 +125,9 @@ def main():
         "--hidden-import", "PyQt6.QtWidgets",
         "--hidden-import", "PyQt6.QtOpenGL",
         "--hidden-import", "PyQt6.QtOpenGLWidgets",
+        "--hidden-import", "PyQt6.QtWebEngineCore",
+        "--hidden-import", "PyQt6.QtWebEngineWidgets",
+        "--hidden-import", "PyQt6.QtWebChannel",
         "--hidden-import", "live2d.v3",
         "--hidden-import", "live2d",
         "--hidden-import", "edge_tts",

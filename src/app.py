@@ -10,6 +10,11 @@ import asyncio
 import signal
 from pathlib import Path
 
+# QWebEngine starts a Chromium helper process for the VRM renderer. These flags
+# keep it usable in locked-down Windows launch contexts and CI smoke tests.
+os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu")
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 from loguru import logger

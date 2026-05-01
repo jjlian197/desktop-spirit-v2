@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('C:\\Users\\lianj\\Python\\desktop-spirit-v2-windows\\src\\assets', 'src/assets'), ('C:\\Users\\lianj\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\live2d\\v3\\FrameworkShaders', 'live2d/v3/FrameworkShaders')]
+datas = [('C:\\Users\\lianj\\Python\\desktop-spirit-v2-windows\\src\\assets', 'src/assets'), ('C:\\Users\\lianj\\Python\\desktop-spirit-v2-windows\\config.yaml', '.'), ('C:\\Users\\lianj\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\live2d\\v3\\FrameworkShaders', 'live2d/v3/FrameworkShaders')]
 binaries = [('C:\\Windows\\System32\\msvcp140.dll', '.'), ('C:\\Windows\\System32\\vcruntime140.dll', '.'), ('C:\\Windows\\System32\\vcruntime140_1.dll', '.')]
-hiddenimports = ['PyQt6.sip', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtOpenGL', 'PyQt6.QtOpenGLWidgets', 'live2d.v3', 'live2d', 'edge_tts', 'pydub', 'pygame', 'aiohttp', 'websockets', 'websockets.legacy', 'psutil', 'loguru', 'PIL', 'yaml']
+hiddenimports = ['PyQt6.sip', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtOpenGL', 'PyQt6.QtOpenGLWidgets', 'PyQt6.QtWebEngineCore', 'PyQt6.QtWebEngineWidgets', 'PyQt6.QtWebChannel', 'live2d.v3', 'live2d', 'edge_tts', 'pydub', 'pygame', 'aiohttp', 'websockets', 'websockets.legacy', 'psutil', 'loguru', 'PIL', 'yaml']
 tmp_ret = collect_all('live2d')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('PyQt6')

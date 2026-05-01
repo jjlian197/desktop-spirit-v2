@@ -1,6 +1,8 @@
 # GUI
-PyQt6>=6.4.0
-PyQt6-Qt6>=6.4.0
+PyQt6==6.10.0
+PyQt6-Qt6==6.10.0
+PyQt6-WebEngine==6.10.0
+PyQt6-WebEngine-Qt6==6.10.0
 
 # Live2D
 live2d-py>=0.4.0
