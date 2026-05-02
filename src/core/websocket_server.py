@@ -249,6 +249,17 @@ class WebSocketServer:
         index = data.get("index", 0)
         priority = data.get("priority", 2)
 
+        live2d_view = self.sprite_window.live2d_view
+        if live2d_view and hasattr(live2d_view, "supports_feature"):
+            if not live2d_view.supports_feature("motion"):
+                await self._send_response(websocket, "motion_ignored", {
+                    "group": group,
+                    "index": index,
+                    "reason": "current renderer does not support motions yet",
+                })
+                logger.info(f"Motion ignored for current renderer: {group}[{index}]")
+                return
+
         from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
         QMetaObject.invokeMethod(
             self.sprite_window,
@@ -414,15 +425,23 @@ class WebSocketServer:
         if self.tts_manager and HAS_TTS:
             try:
                 # 🚨 【关键】说话前回正头部和身体（禁用鼠标跟随，持续5秒）
-                logger.info("🎯 TTS: 回正头部和身体（5秒）...")
-                QMetaObject.invokeMethod(
-                    self.sprite_window,
-                    "reset_pose",
-                    Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(float, 5000.0)  # 5秒
-                )
-                # 短暂延迟确保参数生效
-                await asyncio.sleep(0.1)
+                live2d_view = self.sprite_window.live2d_view
+                can_reset_pose = True
+                if live2d_view and hasattr(live2d_view, "supports_feature"):
+                    can_reset_pose = bool(live2d_view.supports_feature("reset_pose"))
+
+                if can_reset_pose:
+                    logger.info("🎯 TTS: 回正头部和身体（5秒）...")
+                    QMetaObject.invokeMethod(
+                        self.sprite_window,
+                        "reset_pose",
+                        Qt.ConnectionType.QueuedConnection,
+                        Q_ARG(float, 5000.0)  # 5秒
+                    )
+                    # 短暂延迟确保参数生效
+                    await asyncio.sleep(0.1)
+                else:
+                    logger.debug("Skipping reset_pose for current renderer before TTS")
 
                 # Switch provider if requested
                 if provider and provider != self.tts_manager.current_provider.name.lower():

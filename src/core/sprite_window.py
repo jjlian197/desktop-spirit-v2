@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QFrame, QVBoxLayout, QStackedLayout,
     QApplication, QSystemTrayIcon, QMenu
 )
-from PyQt6.QtCore import Qt, QPoint, QRectF, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QPoint, QRectF, QTimer, QProcess, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QIcon, QAction, QFont, QPainter, QPainterPath, QLinearGradient, QColor, QPixmap
 from loguru import logger
 
@@ -408,7 +408,7 @@ class SherrySpriteWindow(QMainWindow):
 
         logger.info(f"Background updated: {self._current_background}")
             
-    def toggle_big_head_mode(self):
+    def toggle_big_head_mode(self, checked: bool = False):
         self.is_big_head = not self.is_big_head
         if self.is_big_head:
             self.setFixedSize(400, 400)
@@ -418,6 +418,85 @@ class SherrySpriteWindow(QMainWindow):
         if self.live2d_view:
             self.live2d_view.set_big_head_mode(self.is_big_head)
 
+    def _renderer_supports(self, feature: str) -> bool:
+        if not self.live2d_view:
+            return False
+        if hasattr(self.live2d_view, "supports_feature"):
+            return bool(self.live2d_view.supports_feature(feature))
+        return True
+
+    def _get_config_path(self) -> Path:
+        return Path(get_resource_path("config.yaml"))
+
+    def _read_config_data(self) -> dict:
+        try:
+            import yaml
+            config_path = self._get_config_path()
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    return yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.error(f"Failed to read config: {e}")
+        return {}
+
+    def _write_config_data(self, data: dict) -> bool:
+        try:
+            import yaml
+            config_path = self._get_config_path()
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to write config: {e}")
+            return False
+
+    def _switch_renderer(self, renderer: str):
+        renderer = str(renderer).strip().lower()
+        if renderer == self.renderer_mode:
+            self.show_message(f"Already using {renderer}")
+            return
+
+        if renderer == "vrm" and not HAS_VRM_WEBENGINE:
+            self.show_message("VRM renderer is not available")
+            return
+
+        if renderer == "live2d" and not HAS_LIVE2D:
+            self.show_message("Live2D renderer is not available")
+            return
+
+        data = self._read_config_data()
+        sprite = data.setdefault("sprite", {})
+        sprite["renderer"] = renderer
+
+        if not self._write_config_data(data):
+            self.show_message("Failed to save renderer selection")
+            return
+
+        self.show_message(f"Switching to {renderer} and restarting...")
+        logger.info(f"Renderer changed to {renderer}, restarting application")
+        QTimer.singleShot(200, self._restart_application)
+
+    def _restart_application(self):
+        try:
+            if getattr(sys, "frozen", False):
+                program = sys.executable
+                args = []
+            else:
+                program = sys.executable
+                args = sys.argv
+
+            workdir = str(Path(__file__).resolve().parents[2])
+            started = QProcess.startDetached(program, args, workdir)
+            if not started:
+                self.show_message("Restart failed. Please relaunch manually.")
+                logger.error("Failed to restart application")
+                return
+
+            QApplication.quit()
+        except Exception as e:
+            logger.error(f"Failed to restart application: {e}")
+            self.show_message("Restart failed. Please relaunch manually.")
+
     def _position_bottom_right(self):
         screen = QApplication.primaryScreen().geometry()
         x = screen.width() - self.width() - 20
@@ -426,9 +505,14 @@ class SherrySpriteWindow(QMainWindow):
 
     def _show_context_menu(self, pos):
         menu = QMenu(self)
+        can_use_expressions = self._renderer_supports("expression")
+        can_use_watermark = self._renderer_supports("watermark")
+        can_use_eye_tracking = self._renderer_supports("eye_tracking")
+        can_use_lip_sync = self._renderer_supports("lip_sync")
 
         # Expression menu (Param-based)
         expr_menu = menu.addMenu("Expression")
+        expr_menu.setEnabled(can_use_expressions)
         expressions = [
             ("Normal", "normal"),
             ("Happy", "happy"),
@@ -448,6 +532,7 @@ class SherrySpriteWindow(QMainWindow):
         # Watermark toggle
         watermark_action = QAction("去水印 (Toggle Watermark)", self)
         watermark_action.triggered.connect(self._toggle_watermark)
+        watermark_action.setEnabled(can_use_watermark)
         menu.addAction(watermark_action)
 
         # Click-through toggle
@@ -470,7 +555,24 @@ class SherrySpriteWindow(QMainWindow):
         eye_tracking_enabled = self.live2d_view and getattr(self.live2d_view, '_eye_tracking_enabled', True)
         eye_action.setChecked(eye_tracking_enabled)
         eye_action.triggered.connect(self._toggle_eye_tracking)
+        eye_action.setEnabled(can_use_eye_tracking)
         menu.addAction(eye_action)
+
+        renderer_menu = menu.addMenu("Renderer")
+
+        blender_action = QAction("Blender / 3D Model", self)
+        blender_action.setCheckable(True)
+        blender_action.setChecked(self.renderer_mode == "vrm")
+        blender_action.setEnabled(HAS_VRM_WEBENGINE)
+        blender_action.triggered.connect(lambda checked=False: self._switch_renderer("vrm"))
+        renderer_menu.addAction(blender_action)
+
+        live2d_action = QAction("Live2D / 2D Model", self)
+        live2d_action.setCheckable(True)
+        live2d_action.setChecked(self.renderer_mode == "live2d")
+        live2d_action.setEnabled(HAS_LIVE2D)
+        live2d_action.triggered.connect(lambda checked=False: self._switch_renderer("live2d"))
+        renderer_menu.addAction(live2d_action)
 
         bg_menu = menu.addMenu("Background")
         bg_transparent_action = QAction("Transparent", self)
@@ -583,6 +685,7 @@ class SherrySpriteWindow(QMainWindow):
                 lip_sync_enabled = self.live2d_view._lip_sync_enabled
             lip_sync_action.setChecked(lip_sync_enabled)
             lip_sync_action.triggered.connect(self._toggle_lip_sync)
+            lip_sync_action.setEnabled(can_use_lip_sync)
             tts_menu.addAction(lip_sync_action)
 
         menu.addSeparator()
@@ -593,12 +696,17 @@ class SherrySpriteWindow(QMainWindow):
         menu.exec(pos)
 
     def _toggle_watermark(self):
+        if not self._renderer_supports("watermark"):
+            self.show_message("Current renderer does not need the watermark toggle")
+            return
         self._watermark_enabled = not self._watermark_enabled
         val = -1.0 if self._watermark_enabled else 0.0
         self.set_parameter("Open_EyeMask4", val)
     
     def _auto_remove_watermark(self):
         """启动时自动去水印"""
+        if not self._renderer_supports("watermark"):
+            return
         self._watermark_enabled = True
         self.set_parameter("Open_EyeMask4", -1.0)
         logger.info("🎭 已自动启用去水印")
@@ -635,9 +743,12 @@ class SherrySpriteWindow(QMainWindow):
     def look_at(self, x: float, y: float):
         """设置眼神看向指定位置 (x, y 范围 -1.0 到 1.0)"""
         if self.live2d_view:
-            self.live2d_view.mouse_x = x
-            self.live2d_view.mouse_y = y
-            self.live2d_view.update()
+            if hasattr(self.live2d_view, "look_at"):
+                self.live2d_view.look_at(x, y)
+            else:
+                self.live2d_view.mouse_x = x
+                self.live2d_view.mouse_y = y
+                self.live2d_view.update()
             logger.info(f"👀 Look at: ({x}, {y})")
 
     @pyqtSlot(float)
