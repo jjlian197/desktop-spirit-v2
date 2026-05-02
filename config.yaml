@@ -17,7 +17,7 @@ sprite:
   vrm:
     path: src/assets/models/vrm/鸣潮-爱弥斯-test.glb
 tts:
-  default_provider: edge
+  default_provider: gptsovits
   auto_translate: true
   translation:
     provider: ''
@@ -41,16 +41,20 @@ tts:
     api_url: http://127.0.0.1:9880/tts
     text_lang: zh
     text_split_method: cut5
-    refer_audio_path: D:/Workspace/1761703720454-qatfwm-sakiko1-e15/参考/なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね.wav
-    prompt_text: なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね
-    prompt_lang: ja
+    refer_audio_path: D:/Workspace/GPT-SoVITS-v2pro-20250604-nvidia50/GPT-SoVITS-v2pro-20250604-nvidia50/ref_audios/爱弥斯_ZH/我还在里面留了一部分自己的算力，让他能在我需要共同行动时配合我。.wav
+    prompt_text: 我还在里面留了一部分自己的算力，让他能在我需要共同行动时配合我。
+    prompt_lang: zh
     media_type: wav
     batch_size: 1
     streaming_mode: false
     top_k: 20
     top_p: 0.3
     temperature: 0.6
-    speed: 0.6
+    speed: 0.5
+  gptsovits_proxy:
+    enabled: false
+    api_url: http://127.0.0.1:8000
+    default_voice: sakiko1
 websocket:
   host: 127.0.0.1
   port: 8765

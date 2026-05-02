@@ -66,9 +66,11 @@ from src.core.tts_provider_base import BaseTTSProvider, TTSResult
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
 from loguru import logger
 
-# Import GPT-SoVITS provider (optional)
+# Import GPT-SoVITS providers (optional)
 try:
-    from src.core.gpt_sovits_provider import GPTSoVITSProvider, GPTSoVITSConfig
+    from src.core.gpt_sovits_provider import (
+        GPTSoVITSProvider, GPTSoVITSConfig, GPTSoVITSProxyProvider
+    )
     GPT_SOVITS_AVAILABLE = True
 except ImportError:
     GPT_SOVITS_AVAILABLE = False
@@ -507,7 +509,7 @@ class TTSManager(QObject):
             "local": LocalTTSProvider(),
         }
         
-        # Add GPT-SoVITS provider if available
+        # Add GPT-SoVITS providers if available
         if GPT_SOVITS_AVAILABLE:
             gptsovits_cfg = tts_config.get("gptsovits", {})
             if gptsovits_cfg.get("enabled", False):
@@ -518,23 +520,37 @@ class TTSManager(QObject):
                     refer_wav_path=gptsovits_cfg.get("refer_audio_path"),
                     prompt_text=gptsovits_cfg.get("prompt_text"),
                     prompt_language=gptsovits_cfg.get("prompt_lang", "zh"),
-                    # api_v2 specific parameters
                     text_split_method=gptsovits_cfg.get("text_split_method", "cut5"),
                     batch_size=gptsovits_cfg.get("batch_size", 1),
                     media_type=gptsovits_cfg.get("media_type", "wav"),
                     streaming_mode=gptsovits_cfg.get("streaming_mode", False),
-                    # Legacy parameters
                     top_k=gptsovits_cfg.get("top_k", 20),
                     top_p=gptsovits_cfg.get("top_p", 0.6),
                     temperature=gptsovits_cfg.get("temperature", 0.6),
                     speed=gptsovits_cfg.get("speed", 1.0),
+                    # SSH 隧道配置
+                    ssh_host=os.environ.get("SSH_TUNNEL_HOST") or None,
+                    ssh_user=os.environ.get("SSH_TUNNEL_USER") or None,
+                    ssh_key=os.environ.get("SSH_TUNNEL_KEY") or None,
                 )
                 self.providers["gptsovits"] = GPTSoVITSProvider(gs_config)
                 logger.info("🎙️ GPT-SoVITS provider loaded with config")
             else:
-                # Default config
                 self.providers["gptsovits"] = GPTSoVITSProvider()
                 logger.info("🎙️ GPT-SoVITS provider loaded (default config)")
+
+            # 多音色代理 Provider
+            proxy_cfg = tts_config.get("gptsovits_proxy", {})
+            if proxy_cfg.get("enabled", False):
+                proxy_url = proxy_cfg.get("api_url", "http://127.0.0.1:8000")
+                self.providers["gptsovits_proxy"] = GPTSoVITSProxyProvider(proxy_url)
+                default_voice = proxy_cfg.get("default_voice", "sakiko1")
+                self.providers["gptsovits_proxy"].voice_id = default_voice
+                logger.info(f"🎙️ GPT-SoVITS-Proxy provider loaded (voice: {default_voice})")
+            else:
+                # 默认也尝试加载代理（不强制要求配置）
+                self.providers["gptsovits_proxy"] = GPTSoVITSProxyProvider()
+                logger.info("🎙️ GPT-SoVITS-Proxy provider loaded (default)")
         
         # Use config default provider if available
         default_provider = tts_config.get("default_provider", preferred_provider)
@@ -687,7 +703,19 @@ class TTSManager(QObject):
             prompt_text=prompt_text,
             prompt_language=prompt_language
         )
-    
+
+    def set_gptsovits_proxy_voice(self, voice: str) -> bool:
+        """切换 GPT-SoVITS-Proxy 的音色"""
+        if "gptsovits_proxy" not in self.providers:
+            logger.error("GPT-SoVITS-Proxy provider not available")
+            return False
+        self.providers["gptsovits_proxy"].voice_id = voice
+        return True
+
+    def get_gptsovits_proxy_voices(self) -> List[str]:
+        """获取可用的 Proxy 音色列表（需代理服务支持）"""
+        return []  # 音色列表由代理服务管理，可扩展为 API 查询
+
     def set_edge_voice(self, voice: str) -> bool:
         """
         设置 Edge TTS 语音

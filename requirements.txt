@@ -22,6 +22,9 @@ watchdog>=3.0.0
 # Logging
 loguru>=0.7.0
 
+# SSH Tunnel (optional, for remote GPT-SoVITS)
+paramiko>=3.0.0
+
 # macOS Native Window Level Support (optional, for advanced always-on-top)
 pyobjc>=9.0; sys_platform == 'darwin'
 
