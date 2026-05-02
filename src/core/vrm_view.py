@@ -220,7 +220,7 @@ class VrmView(QWidget):
             "expression": True,
             "parameter": True,
             "look_at": True,
-            "motion": False,
+            "motion": True,
             "reset_pose": False,
             "background": True,
             "big_head": True,
@@ -259,7 +259,7 @@ class VrmView(QWidget):
         return self._params.get(param_id, 0.0)
 
     def trigger_motion(self, group: str, index: int = 0):
-        logger.debug(f"VRM motion '{group}[{index}]' ignored: no Blender/3D animation mapping yet")
+        self._run_js(f"window.SherryVrm && window.SherryVrm.triggerMotion({json.dumps(str(group))});")
 
     def reset_pose(self, duration_ms: float = 3000.0):
         logger.debug(f"VRM reset_pose ignored ({duration_ms}ms): pose reset is not used in Blender/3D mode")

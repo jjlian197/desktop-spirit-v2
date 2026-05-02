@@ -476,6 +476,47 @@ class SherrySpriteWindow(QMainWindow):
         logger.info(f"Renderer changed to {renderer}, restarting application")
         QTimer.singleShot(200, self._restart_application)
 
+    def _list_vrm_model_files(self) -> list[Path]:
+        base_dir = Path(get_resource_path("src/assets/models/vrm"))
+        if not base_dir.exists():
+            return []
+
+        candidates = []
+        for pattern in ("*.vrm", "*.glb", "*.gltf"):
+            candidates.extend(base_dir.rglob(pattern))
+        return sorted([path for path in candidates if path.is_file()], key=lambda p: p.name.lower())
+
+    def _get_current_vrm_path(self) -> str:
+        data = self._read_config_data()
+        sprite = data.get("sprite", {})
+        vrm_path = sprite.get("vrm", {}).get("path")
+        return str(vrm_path).replace("\\", "/") if vrm_path else ""
+
+    def _switch_vrm_model(self, model_path: Path):
+        try:
+            rel_path = model_path.resolve().relative_to(Path(get_resource_path(".")).resolve())
+        except Exception:
+            rel_path = model_path
+
+        rel_str = str(rel_path).replace("\\", "/")
+        current = self._get_current_vrm_path()
+        if current == rel_str:
+            self.show_message(f"Already using {model_path.name}")
+            return
+
+        data = self._read_config_data()
+        sprite = data.setdefault("sprite", {})
+        vrm_cfg = sprite.setdefault("vrm", {})
+        vrm_cfg["path"] = rel_str
+
+        if not self._write_config_data(data):
+            self.show_message("Failed to save Blender model selection")
+            return
+
+        self.show_message(f"Switching Blender model to {model_path.name}...")
+        logger.info(f"VRM model changed to {rel_str}, restarting application")
+        QTimer.singleShot(200, self._restart_application)
+
     def _restart_application(self):
         try:
             if getattr(sys, "frozen", False):
@@ -573,6 +614,28 @@ class SherrySpriteWindow(QMainWindow):
         live2d_action.setEnabled(HAS_LIVE2D)
         live2d_action.triggered.connect(lambda checked=False: self._switch_renderer("live2d"))
         renderer_menu.addAction(live2d_action)
+
+        blender_model_menu = renderer_menu.addMenu("Blender Model")
+        blender_model_menu.setEnabled(self.renderer_mode == "vrm")
+        current_vrm_path = self._get_current_vrm_path()
+        vrm_models = self._list_vrm_model_files()
+        if vrm_models:
+            for model_path in vrm_models:
+                try:
+                    rel_path = model_path.resolve().relative_to(Path(get_resource_path(".")).resolve())
+                    rel_str = str(rel_path).replace("\\", "/")
+                except Exception:
+                    rel_str = str(model_path).replace("\\", "/")
+
+                action = QAction(model_path.name, self)
+                action.setCheckable(True)
+                action.setChecked(current_vrm_path == rel_str)
+                action.triggered.connect(lambda checked=False, p=model_path: self._switch_vrm_model(p))
+                blender_model_menu.addAction(action)
+        else:
+            no_model_action = QAction("No VRM/GLB models found", self)
+            no_model_action.setEnabled(False)
+            blender_model_menu.addAction(no_model_action)
 
         bg_menu = menu.addMenu("Background")
         bg_transparent_action = QAction("Transparent", self)

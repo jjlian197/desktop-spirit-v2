@@ -349,29 +349,32 @@ async def _handle_touch(self, action: str, part: str):
 ```python
 async def _idle_loop(self):
     """空闲检测与待机动画循环"""
-    
+
     while self.running:
         idle_time = time.time() - self.last_interaction_time
-        
+
         # 判断是否进入空闲状态
         if idle_time >= self.idle_config["idle_timeout"] and not self.is_idle:
             self.is_idle = True
             logger.info(f"进入空闲状态（已闲置 {idle_time:.1f} 秒）")
-        
-        # 空闲状态下播放待机动画
+
+        # 空闲状态下播放待机动画（如果 Idle motion 已启用）
         if self.is_idle and not self.idle_motion_playing:
+            if not self.idle_config["idle_motion_enabled"]:
+                await asyncio.sleep(1)
+                continue
             self.idle_motion_playing = True
-            
+
             # 使用 force=False 避免重复打断
             try:
                 result = await self.trigger_motion("Idle", interactive=False, force=False)
             except Exception as e:
                 logger.error(f"待机动画异常: {e}")
-            
+
             # 等待间隔时间
             await asyncio.sleep(self.idle_config["motion_interval"])
             self.idle_motion_playing = False
-            
+
             # 随机眨眼（30%概率）
             if self.idle_config["random_blink"] and random.random() < 0.3:
                 await self.send_command("parameter_batch", {
@@ -381,9 +384,29 @@ async def _idle_loop(self):
                 await self.send_command("parameter_batch", {
                     "params": {"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0}
                 })
-        
+
         await asyncio.sleep(0.5)
 ```
+
+#### Idle Motion 与渲染器
+
+Idle motion 的触发会根据渲染器类型自动控制：
+
+```python
+@staticmethod
+def _detect_idle_motion_enabled() -> bool:
+    """读取 config.yaml — VRM/GLB 模式下禁用 Idle motion"""
+    config_path = Path(__file__).resolve().parents[2] / "config.yaml"
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    renderer = str(cfg.get("sprite", {}).get("renderer", "live2d")).lower()
+    if renderer == "vrm":
+        return False  # VRM 模式下 Idle motion 由 viewer.js 的内置 idle 动画处理
+    return True
+```
+
+- **Live2D 模式**：Idle motion 由 `SpriteBrain` 通过 `trigger_motion("Idle")` 触发 Live2D SDK 播放 motion3.json 动画
+- **VRM/GLB 模式**：Idle motion 由 `viewer.js` 的 `applyIdleAnimation()` 内置处理（呼吸、身体摆动），`SpriteBrain` 不额外触发 Idle motion
 
 #### 动作触发接口
 
@@ -545,6 +568,39 @@ motion_mapping = {
     "Idle": "Idle.motion3.json"
 }
 ```
+
+---
+
+## VRM / GLB 动作系统（Three.js）
+
+VRM/GLB 模型通过 Three.js 的 `@pixiv/three-vrm` 渲染，支持程序化骨骼动画（procedural bone animation），不依赖预定义的 motion3.json 文件。
+
+### 骨骼动画函数
+
+`viewer.js` 中的 `applyGesture()` 函数根据 group 名称触发动画：
+
+| Group | 动画 |
+|-------|------|
+| wave | 右手挥动 |
+| shy | 双手交叉抱在胸前，低头害羞 |
+| think | 右手抬到太阳穴附近，轻微歪头思考 |
+| nod | 头部上下点动（肯定/否认） |
+| shake | 头部左右摆动（拒绝/困惑） |
+| stretch | 双手上举，身体伸展 |
+| idle | 呼吸 + 身体轻微摆动（内置待机动画） |
+
+### Idle 动画
+
+当 `triggerMotion("idle")` 被调用时，`viewer.js` 的 `applyIdleAnimation()` 执行：
+
+- 呼吸效果：胸腔骨骼 z 轴周期性旋转
+- 身体摆动：脊椎骨骼轻微左右倾斜
+- 重心转移：髋部骨骼轻微左右偏移
+- 这些都是持续的周期性动画，叠加在姿势骨骼之上
+
+### 骨骼检测
+
+动画系统自动扫描模型的骨骼名称，匹配常见命名模式（Bip001、mixamorig、 标准骨骼等）。对于没有标准骨骼的模型，动画效果可能不完整。
 
 ---
 

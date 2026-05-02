@@ -1,24 +1,25 @@
-# Sherry Desktop Sprite 🐱💜
+# Sherry Desktop Sprite
 
-> A cute desktop pet powered by Live2D and PyQt6 for macOS
+> A cute desktop pet powered by Live2D / VRM and PyQt6 (Windows & macOS)
 
 ![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
-![Platform](https://img.shields.io/badge/platform-macos-lightgrey.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-## ✨ Features
+## Features
 
-- 🎭 **Live2D Support** - Smooth 2D character animation with physics and expressions
-- 😊 **Expression Control** - 43+ facial expressions and poses via WebSocket API
-- 🪟 **Transparent Window** - Frameless, always-on-top display
-- 🎨 **Dynamic Background** - Change background color/image/gradient via API
-- 🔌 **WebSocket & HTTP API** - Remote control for all features
-- 💬 **Bubble Messages** - Floating speech bubbles
-- 🔊 **TTS Integration** - Text-to-speech with multi-language support
-- 🌐 **AI Translation** - Support OpenAI/Baidu/Youdao/Niutrans for quality translation
-- 🔄 **Auto-Restart** - launchd integration for 24/7 uptime
-- 🖱️ **Draggable** - Click and drag to move anywhere
-- 🌸 **Japanese Voice** - Auto-translate Chinese to Japanese with natural voice
+- **Dual Renderer** - Live2D (2D) and VRM/GLB (3D) character rendering, switchable via right-click menu
+- **Live2D Support** - Smooth 2D animation with physics, expressions, and motion files
+- **VRM/GLB Support** - 3D character models from Blender with bone-based gestures (wave, shy, nod, shake, think, stretch)
+- **Expression Control** - 43+ facial expressions for Live2D; expression mapping for VRM models
+- **Procedural Animations** - Idle breathing/sway, eye tracking, lip sync for both renderers
+- **Transparent Window** - Frameless, always-on-top display with draggable interaction
+- **Dynamic Background** - Change background color/image/gradient via API
+- **WebSocket & HTTP API** - Remote control for all features
+- **Bubble Messages** - Floating speech bubbles
+- **TTS Integration** - Text-to-speech with Edge-TTS, GPT-SoVITS, and multi-language support
+- **AI Translation** - Support OpenAI/Baidu/Youdao/Niutrans for quality translation
+- **Blender Pipeline** - Export script (`tools/export_blend_to_glb.py`) for simplified material export
 
 ## 🚀 Quick Start
 
@@ -95,90 +96,66 @@ asyncio.run(say_hello())
 
 See [docs/API.md](docs/API.md) and [docs/BACKGROUND_API.md](docs/BACKGROUND_API.md) for full API documentation.
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 sherry-desktop-sprite/
 ├── src/                        # Main source code
 │   ├── main.py                 # Entry point
-│   ├── app.py                  # Main application
 │   ├── core/                   # Core modules
-│   │   ├── sprite_window.py    # PyQt6 transparent window
+│   │   ├── sprite_window.py    # PyQt6 transparent window, renderer management
 │   │   ├── live2d_view.py      # Live2D renderer
+│   │   ├── vrm_view.py         # VRM/GLB renderer (Three.js via QWebEngine)
 │   │   ├── websocket_server.py # WebSocket control
-│   │   ├── http_server.py      # HTTP API server
 │   │   ├── tts_manager.py      # Text-to-speech
 │   │   └── lip_sync_websocket.py # Lip sync
-│   ├── brain/                  # 🧠 AI & Intelligence
-│   │   └── sprite_brain.py     # Autonomous behavior system
+│   ├── brain/                  # AI & Intelligence
+│   │   └── sprite_brain.py     # Autonomous behavior, idle system
 │   ├── ui/                     # UI components
 │   │   └── bubble_widget.py    # Message bubbles
-│   ├── utils/                  # Utilities
-│   │   └── logger.py           # Logging setup
-│   └── assets/models/          # Live2D models
-│       └── hanamaru/           # Default catgirl model
-├── mouse_follow/               # 🖱️ Mouse tracking system
-│   ├── mouse_follow_ctl.py     # Control script
-│   ├── mouse_tracker.py        # Tracking logic
-│   ├── mouse_follow.sh         # Shell wrapper
-│   └── config.json             # Configuration
-├── tools/                      # 🛠️ Development tools
-│   ├── param_checkers/         # Model parameter tools
-│   │   ├── check_original_model_params.py
-│   │   ├── detail_check.py
-│   │   ├── list_params.py
-│   │   └── quick_check_params.py
-│   └── tests/                  # Test scripts
-│       ├── test_live2d.py
-│       ├── test_minimal.py
-│       ├── test_param_direct.py
-│       ├── test_watermark_removal.py
-│       ├── test_websocket_control.py
-│       └── verify.py           # Dependency checker
-├── scripts/                    # Utility scripts
-│   ├── install.sh              # One-click installer
-│   ├── uninstall.sh            # Uninstall script
-│   └── remove_watermark.py     # Watermark removal
-├── launchd/                    # macOS service config
-│   └── com.sherry.sprite.plist
+│   └── assets/
+│       ├── models/
+│       │   ├── hanamaru/       # Default Live2D model
+│       │   └── vrm/            # VRM/GLB models
+│       └── vrm_viewer/         # Three.js viewer (viewer.js, index.html)
+├── tools/                      # Development tools
+│   ├── export_blend_to_glb.py  # Blender export script (GLB/VRM)
+│   └── ...
 ├── docs/                       # Documentation
-│   ├── API.md                  # API reference
-│   ├── DEPLOY.md               # Deployment guide
-│   ├── BUILD_GUIDE.md          # 📦 Windows packaging guide
-│   ├── BACKGROUND_API.md       # 🎨 Background change API
-│   ├── MODELS.md               # Model setup
-│   ├── EXPRESSIONS.md          # Expression list
-│   ├── BODY_PARAMETERS.md      # Body parameter reference
-│   ├── MOUSE_FOLLOW_GUIDE.md   # Mouse follow tutorial
-│   ├── SPRITE_BRAIN_GUIDE.md   # Brain system guide
-│   ├── APPLE_SILICON_FIX.md    # Apple Silicon notes
-│   ├── JAPANESE_TTS_GUIDE.md   # 🇯🇵 Japanese voice setup
-│   ├── CHINA_TRANSLATION_API.md # 🇨🇳 Chinese translation APIs
-│   ├── TRANSLATION_QUICKSTART.md # 🌐 Translation quick start
-│   └── RIGHT_CLICK_MENU.md     # 🖱️ Right-click menu guide
-├── build_exe.py                # 📦 Windows EXE builder
-├── SherrySprite.spec           # PyInstaller spec file
-├── tests/                      # Test client
-│   └── test_client.py
 ├── config.yaml                 # Main configuration
 └── requirements.txt            # Python dependencies
 ```
 
-## 🎨 Live2D Models
+## Models
+
+### Live2D
 
 Place Live2D models in `src/assets/models/`:
 
 ```bash
-src/assets/models/
-└── hiyori/
-    ├── hiyori.model3.json
-    ├── hiyori.moc3
-    ├── textures/
-    ├── motions/
-    └── expressions/
+src/assets/models/hanamaru/
+├── hiyori.model3.json
+├── textures/
+├── motions/
+└── expressions/
 ```
 
-Download free sample models from [Live2D](https://www.live2d.com/en/learn/sample/).
+### VRM / GLB (3D)
+
+Place VRM/GLB models in `src/assets/models/vrm/`. Export from Blender using:
+
+```bash
+blender -b your_model.blend -P tools/export_blend_to_glb.py -- output.glb
+```
+
+Switch renderers via the right-click menu or `config.yaml`:
+
+```yaml
+sprite:
+  renderer: vrm   # or live2d
+  vrm:
+    path: src/assets/models/vrm/your-model.glb
+```
 
 See [docs/MODELS.md](docs/MODELS.md) for details.
 
@@ -247,20 +224,22 @@ websocket:
 - **Speech Pattern**: Ends sentences with "meow~" (喵～)
 - **Color Theme**: Purple (#9B7EDE) + Pink accents
 
-## 🗺️ Roadmap
+## Roadmap
 
 - [x] Basic PyQt6 window with transparency
 - [x] WebSocket control API
 - [x] Message bubbles
-- [x] launchd integration
 - [x] Live2D model integration
 - [x] Expression control (43+ expressions)
-- [ ] Custom Sherry Live2D model
-- [ ] Voice synthesis with lip sync
-- [ ] Idle animations
-- [ ] Interactive responses
+- [x] Voice synthesis with lip sync
+- [x] Idle animations
+- [x] Interactive responses
+- [x] Windows support
+- [x] VRM/GLB 3D model renderer (Three.js + QWebEngine)
+- [x] Blender export pipeline with material simplification
+- [x] Bone-based procedural gestures for 3D models
 - [ ] Settings UI
-- [ ] Windows/Linux support
+- [ ] Increase gesture amplitude for 3D models
 
 ## 📄 License
 

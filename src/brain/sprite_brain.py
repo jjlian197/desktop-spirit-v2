@@ -9,6 +9,8 @@ import json
 import logging
 import random
 import time
+import yaml
+from pathlib import Path
 import ctypes
 from ctypes import wintypes
 from datetime import datetime
@@ -121,6 +123,7 @@ class SpriteBrain:
             "motion_interval": 6,      # 待机动画播放间隔（秒）
             "random_blink": True,      # 空闲时随机眨眼
             "random_sigh": True,       # 空闲时随机叹气/说话
+            "idle_motion_enabled": self._detect_idle_motion_enabled(),
         }
         self.last_interaction_time = time.time()  # 上次交互时间戳
         self.is_idle = False                      # 当前是否处于空闲状态
@@ -141,6 +144,21 @@ class SpriteBrain:
         except Exception as e:
             logger.error(f"鼠标跟随初始化失败: {e}")
             self.mouse_config["enabled"] = False
+
+    @staticmethod
+    def _detect_idle_motion_enabled() -> bool:
+        """Read config.yaml — disable Idle motion for VRM/GLB renderer."""
+        try:
+            config_path = Path(__file__).resolve().parents[2] / "config.yaml"
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+            renderer = str(cfg.get("sprite", {}).get("renderer", "live2d")).lower()
+            if renderer == "vrm":
+                logger.info("VRM/GLB renderer detected — Idle motion disabled")
+                return False
+        except Exception as e:
+            logger.debug(f"Could not read renderer config for idle motion: {e}")
+        return True
 
     async def connect(self):
         retry_count = 0
@@ -328,8 +346,11 @@ class SpriteBrain:
                 self._last_idle_debug = int(idle_time)
                 logger.info(f"⏱️ 空闲计时: {idle_time:.1f}s, is_idle={self.is_idle}, playing={self.idle_motion_playing}")
             
-            # 空闲状态下播放待机动画（如果模型支持）
+            # 空闲状态下播放待机动画（如果模型支持且 Idle motion 已启用）
             if self.is_idle and not self.idle_motion_playing:
+                if not self.idle_config["idle_motion_enabled"]:
+                    await asyncio.sleep(1)
+                    continue
                 self.idle_motion_playing = True
                 logger.info("🎬 尝试播放待机动画...")
                 # 尝试触发 Idle 动画，但失败时不影响流程

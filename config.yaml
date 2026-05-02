@@ -1,8 +1,6 @@
-# Sprite configuration
 sprite:
-  name: "Sherry"
-  # Renderer options: live2d, vrm
-  renderer: "vrm"
+  name: Sherry
+  renderer: vrm
   window:
     width: 400
     height: 600
@@ -10,133 +8,54 @@ sprite:
     always_on_top: true
     frameless: true
     transparent: true
-  
-  # Starting position (center of screen if null)
   position:
     x: null
     y: null
-  
-  # Live2D model path
   model:
-    path: "src/assets/models/hanamaru"
-    default_expression: "normal"
-
-  # VRM/Three.js renderer path. Put a Blender-exported .vrm/.glb/.gltf here.
+    path: src/assets/models/hanamaru
+    default_expression: normal
   vrm:
-    path: "src/assets/models/vrm/鸣潮-爱弥斯.glb"
-    
-# TTS Configuration
+    path: src/assets/models/vrm/鸣潮-爱弥斯-test.glb
 tts:
-  # Default provider: edge, elevenlabs, local, gptsovits
-  default_provider: "edge"
-  
-  # 自动翻译设置（当语言切换到非中文时，自动翻译文本）
+  default_provider: edge
   auto_translate: true
-  
-  # 翻译配置
   translation:
-    # 翻译提供商：openai, claude, ollama
-    # 留空则只使用国内API或Google翻译
-    provider: ""
-    
-    # ========================================
-    # 国内翻译API配置（推荐国内用户使用）
-    # 这些API在国内访问速度快，稳定
-    # ========================================
+    provider: ''
     china:
-      # 百度翻译（推荐）
-      # 注册: https://fanyi-api.baidu.com/
-      # 免费额度: 标准版每月5万字符
       baidu:
-        app_id: ""
-        app_key: ""
-      
-      # 有道翻译
-      # 注册: https://ai.youdao.com/
-      # 免费额度: 新用户赠送50元体验金
+        app_id: ''
+        app_key: ''
       youdao:
-        app_id: ""
-        app_key: ""
-      
-      # 小牛翻译（东北大学）
-      # 注册: https://niutrans.com/
-      # 免费额度: 每天20万字符
+        app_id: ''
+        app_key: ''
       niutrans:
-        app_id: "ZfV1772880774702"
-        api_key: "2cf43fff1f7db16cb934c0ef7fe24a7c"
-    
-    # ========================================
-    # OpenAI 配置（质量最好）
-    # ========================================
-    # api_key: "sk-your-api-key-here"
-    # api_base: "https://api.openai.com/v1"  # 可选，用于代理
-    # model: "gpt-4o-mini"  # 可选，默认 gpt-4o-mini
-    
-    # ========================================
-    # Claude 配置
-    # ========================================
-    # api_key: "sk-ant-your-api-key"
-    # model: "claude-3-haiku-20240307"  # 可选
-    
-    # ========================================
-    # Ollama 配置（本地模型，免费）
-    # ========================================
-    # api_base: "http://localhost:11434"
-    # model: "qwen2.5:7b"
-    
-    # 缓存设置
+        app_id: ZfV1772880774702
+        api_key: 2cf43fff1f7db16cb934c0ef7fe24a7c
     use_cache: true
-  
-  # Edge TTS 语音配置（免费，无需本地部署）
   edge:
-    # === 中文语音选项 ===
-    # zh-CN-XiaoxiaoNeural - 女声（晓晓，推荐）
-    # zh-CN-YunjianNeural  - 男声（云健）
-    # zh-CN-YunxiNeural    - 男声（云希）
-    # === 日文语音选项 ===
-    # ja-JP-NanamiNeural - 女声（清晰自然，推荐）
-    # ja-JP-KeitaNeural  - 男声
-    # ja-JP-MayuNeural   - 女声
-    # ja-JP-AoiNeural    - 女声
-    # === 英文语音选项 ===
-    # en-US-AriaNeural     - 女声
-    voice: "zh-CN-XiaoxiaoNeural"
-    rate: "+0%"      # 语速: -50% 到 +50%
-    pitch: "+0Hz"    # 音调: -50Hz 到 +50Hz
-  
-  # GPT-SoVITS 配置（需要本地部署 GPT-SoVITS）
+    voice: zh-CN-XiaoxiaoNeural
+    rate: +0%
+    pitch: +0Hz
   gptsovits:
     enabled: true
-    api_url: "http://127.0.0.1:9880/tts"
-    
-    # 文本语言: zh(中文), ja(日文), en(英文), auto(自动)
-    text_lang: "zh"
-    text_split_method: "cut5"
-    
-    # 参考音频（用于音色克隆）
-    refer_audio_path: "D:/Workspace/1761703720454-qatfwm-sakiko1-e15/参考/なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね.wav"
-    prompt_text: "なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね"
-    prompt_lang: "ja"
-    
-    # 音频输出设置
-    media_type: "wav"
+    api_url: http://127.0.0.1:9880/tts
+    text_lang: zh
+    text_split_method: cut5
+    refer_audio_path: D:/Workspace/1761703720454-qatfwm-sakiko1-e15/参考/なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね.wav
+    prompt_text: なんだか申し訳ありませんわそれにしても可愛らしいお部屋ですわね
+    prompt_lang: ja
+    media_type: wav
     batch_size: 1
     streaming_mode: false
-    
-    # 生成参数
     top_k: 20
     top_p: 0.3
     temperature: 0.6
     speed: 0.6
-
-# WebSocket server
 websocket:
-  host: "127.0.0.1"
+  host: 127.0.0.1
   port: 8765
-  
-# Logging
 logging:
-  level: "INFO"
-  file: "~/.sherry/sprite.log"
-  max_size: "10MB"
+  level: INFO
+  file: ~/.sherry/sprite.log
+  max_size: 10MB
   backup_count: 5
