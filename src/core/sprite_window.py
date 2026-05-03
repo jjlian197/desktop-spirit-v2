@@ -1071,7 +1071,7 @@ class SherrySpriteWindow(QMainWindow):
         logger.info(f"🎤 STT 识别文字: {text}")
 
         # 检测唤醒词
-        wake_words = ["爱弥斯", "Aemeath", "aemeath", "雪莉", "Sherry", "sherry"]
+        wake_words = ["爱弥斯", "Aemeath", "aemeath", "小爱", "雪莉", "Sherry", "sherry"]
         detected_name = None
         for name in wake_words:
             if name in text:

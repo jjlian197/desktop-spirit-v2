@@ -7,6 +7,7 @@ Handles audio playback and lip sync integration
 
 import os
 import sys
+import hashlib
 
 # Import asyncio first to avoid subprocess.Popen type issues on Windows
 import asyncio
@@ -569,6 +570,12 @@ class TTSManager(QObject):
         
         # Cleanup tracking
         self._temp_files: List[str] = []
+
+        # Audio cache for pre-generated dialogue
+        self._cache_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "src", "assets", "audio", "tts_cache"
+        )
         
         # Translation support with AI translator
         self._auto_translate = tts_config.get("auto_translate", True)
@@ -801,6 +808,34 @@ class TTSManager(QObject):
         # 翻译到当前语言
         return await self._translator.translate(text, target_lang=self._current_language)
     
+    @staticmethod
+    def _clean_for_tts(text: str) -> str:
+        """去掉 emoji 和特殊符号，用于 TTS 和缓存 key"""
+        import re
+        cleaned = re.sub(
+            "["
+            "\U0001F600-\U0001F64F\U0001F300-\U0001F5FF"
+            "\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF"
+            "\U00002702-\U000027B0\U000024C2-\U0001F251"
+            "\U0001f926-\U0001f937\U00010000-\U0010ffff"
+            "‍️♀-♂☀-⭕⏏️⏩⌚〰️​⁩]+",
+            '', text
+        ).strip()
+        return cleaned
+
+    def _cache_path(self, text: str) -> str:
+        """Get cached audio path for text (emoji-stripped)"""
+        clean = self._clean_for_tts(text)
+        h = hashlib.md5(clean.encode('utf-8')).hexdigest()
+        return os.path.join(self._cache_dir, f"{h}.wav")
+
+    def _find_cached(self, text: str) -> Optional[str]:
+        """Check if pre-cached audio exists"""
+        path = self._cache_path(text)
+        if os.path.exists(path):
+            return path
+        return None
+
     async def speak(self, text: str, voice_id: Optional[str] = None) -> TTSResult:
         """
         Generate and play TTS audio with lip sync
@@ -823,11 +858,38 @@ class TTSManager(QObject):
         # 翻译文本（如果需要）
         original_text = text
         translated_text = await self._translate_text(text)
-        
+
         if translated_text != original_text:
             logger.info(f"🌐 原文: '{original_text[:50]}...'")
             logger.info(f"🌐 译文: '{translated_text[:50]}...'")
-        
+
+        # 优先从缓存读取
+        cached_path = self._find_cached(translated_text)
+        if cached_path:
+            logger.info(f"📦 使用缓存音频: {translated_text[:30]}...")
+            self._is_speaking = True
+            self.tts_started.emit(translated_text)
+            try:
+                if cached_path:
+                    self._temp_files.append(cached_path)
+                    self._current_audio_path = cached_path
+                    self._amplitude_data = self.audio_analyzer.analyze_amplitude(cached_path, 0)
+                    self.audio_amplitude.emit(self._amplitude_data)
+                await self._play_audio(cached_path)
+                return TTSResult(audio_path=cached_path, text=text,
+                                 duration_ms=int(self._amplitude_data.__len__() * 1000 / 30)
+                                 if self._amplitude_data else 2000,
+                                 sample_rate=24000, success=True)
+            except Exception as e:
+                logger.error(f"❌ 缓存播放失败: {e}")
+                self._is_speaking = False
+                self.tts_finished.emit()
+                return TTSResult(audio_path="", text=text, duration_ms=0,
+                                 sample_rate=24000, success=False, error=str(e))
+            finally:
+                self._is_speaking = False
+                self.tts_finished.emit()
+
         self._is_speaking = True
         self.tts_started.emit(translated_text)
         
@@ -851,6 +913,16 @@ class TTSManager(QObject):
             
             # Track temp file for cleanup
             if result.audio_path:
+                # Save to cache for future use
+                try:
+                    cache_path = self._cache_path(translated_text)
+                    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                    import shutil
+                    shutil.copy2(result.audio_path, cache_path)
+                    logger.debug(f"📦 音频已缓存: {translated_text[:20]}...")
+                except Exception as e:
+                    logger.debug(f"缓存保存失败(不影响播放): {e}")
+
                 self._temp_files.append(result.audio_path)
                 self._current_audio_path = result.audio_path
                 
