@@ -810,18 +810,19 @@ class TTSManager(QObject):
     
     @staticmethod
     def _clean_for_tts(text: str) -> str:
-        """去掉 emoji 和特殊符号，用于 TTS 和缓存 key"""
-        import re
-        cleaned = re.sub(
-            "["
-            "\U0001F600-\U0001F64F\U0001F300-\U0001F5FF"
-            "\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF"
-            "\U00002702-\U000027B0\U000024C2-\U0001F251"
-            "\U0001f926-\U0001f937\U00010000-\U0010ffff"
-            "‍️♀-♂☀-⭕⏏️⏩⌚〰️​⁩]+",
-            '', text
-        ).strip()
-        return cleaned
+        """去掉 emoji，保留 CJK、ASCII 和常见标点（与生成脚本保持一致）"""
+        import unicodedata
+        result = []
+        for ch in text:
+            if ord(ch) < 0x2000:
+                result.append(ch)
+            elif unicodedata.category(ch).startswith(('So', 'Sk')):
+                continue
+            elif 0x1F600 <= ord(ch) <= 0x1FFFF:
+                continue
+            else:
+                result.append(ch)
+        return ''.join(result).strip()
 
     def _cache_path(self, text: str) -> str:
         """Get cached audio path for text (emoji-stripped)"""
