@@ -225,7 +225,7 @@ class HTTPRequestHandler:
         result = {
             "success": True,
             "status": "running",
-            "name": "Sherry Desktop Sprite",
+            "name": "Aemeath Desktop Sprite",
             "apis": [
                 "/api/background",
                 "/api/status", 

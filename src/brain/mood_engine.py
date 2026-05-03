@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-雪莉的情绪引擎 💖
+爱弥斯的情绪引擎 💖
 负责管理精灵的心理状态，并根据状态决定表情和语言风格。
 """
 
@@ -11,7 +11,7 @@ from loguru import logger
 
 class MoodEngine:
     """
-    雪莉的情绪引擎 💖
+    爱弥斯的情绪引擎 💖
     负责管理精灵的心理状态，并根据状态决定表情和语言风格。
     """
     
@@ -73,7 +73,7 @@ class MoodEngine:
             decay = int((idle_time - 300) / 300) * 2  # 每5分钟减2
             new_level = max(10, self.affection_level - decay)
             if new_level < self.affection_level:
-                logger.info(f"💔 主人不理雪莉了，好感度下降: {self.affection_level} → {new_level}")
+                logger.info(f"💔 父亲不理爱弥斯了，好感度下降: {self.affection_level} → {new_level}")
                 self.affection_level = new_level
         
         # 随时间流逝，如果没有互动，会感到孤独或疲倦
@@ -84,7 +84,7 @@ class MoodEngine:
             
     def set_mood(self, mood_name):
         if mood_name in self.MOODS and mood_name != self.current_mood:
-            logger.info(f"雪莉的心情变更为: {mood_name}")
+            logger.info(f"爱弥斯的心情变更为: {mood_name}")
             self.current_mood = mood_name
             return True
         return False

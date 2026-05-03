@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sherry Sprite Window - Transparent, Frameless, Always-on-Top
+Aemeath Sprite Window - Transparent, Frameless, Always-on-Top
 """
 
 import sys
@@ -122,14 +122,14 @@ class BackgroundFrame(QFrame):
 
 
 class SherrySpriteWindow(QMainWindow):
-    """Main window for Sherry Desktop Sprite"""
+    """Main window for Aemeath Desktop Sprite"""
 
     # Signals for WebSocket communication
     expression_changed = pyqtSignal(str)
     motion_triggered = pyqtSignal(str, int)
     message_received = pyqtSignal(str, int)
     
-    # 🚨 【触觉反馈】触摸事件信号 - 当用户触摸雪莉时发射
+    # 🚨 【触觉反馈】触摸事件信号 - 当用户触摸爱弥斯时发射
     touch_event = pyqtSignal(str, str)  # (action, part) 例如 ("tap", "head")
 
     def __init__(self):
@@ -347,7 +347,7 @@ class SherrySpriteWindow(QMainWindow):
         
         tray_menu = QMenu()
         
-        show_action = QAction("Show Sherry", self)
+        show_action = QAction("Show Aemeath", self)
         show_action.triggered.connect(self.show)
         tray_menu.addAction(show_action)
         
@@ -769,7 +769,7 @@ class SherrySpriteWindow(QMainWindow):
 
         # Test phrases
         test_phrases = [
-            ("你好，世界！", "你好，世界！我是雪莉~"),
+            ("你好，世界！", "你好，世界！我是爱弥斯~"),
             ("测试语音", "这是一个语音测试，你能听到我说话吗？"),
             ("长句测试", "今天天气真不错，适合出去散步和喝咖啡呢！"),
             ("英文测试", "Hello, this is a test of the TTS system."),
@@ -820,7 +820,7 @@ class SherrySpriteWindow(QMainWindow):
     
     def _on_touched(self, action: str, part: str):
         """🚨 【触觉反馈】处理触摸事件，转发到大脑"""
-        logger.info(f"💖 雪莉感受到了主人的{action}，部位: {part}")
+        logger.info(f"💖 爱弥斯感受到了父亲的{action}，部位: {part}")
         # 发射信号，由 app.py 转发到 WebSocket
         self.touch_event.emit(action, part)
 
@@ -1071,7 +1071,7 @@ class SherrySpriteWindow(QMainWindow):
         logger.info(f"🎤 STT 识别文字: {text}")
 
         # 检测唤醒词
-        wake_words = ["雪莉", "Sherry", "sherry", "雪梨"]
+        wake_words = ["爱弥斯", "Aemeath", "aemeath", "雪莉", "Sherry", "sherry"]
         detected_name = None
         for name in wake_words:
             if name in text:
@@ -1097,7 +1097,7 @@ class SherrySpriteWindow(QMainWindow):
         def delayed_speak():
             import time
             time.sleep(0.3)
-            self._do_tts_speak("主人我听到了！")
+            self._do_tts_speak("父亲我听到了！喵～")
         import threading
         threading.Thread(target=delayed_speak, daemon=True).start()
 

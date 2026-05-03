@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sherry Sprite Brain (雪莉大脑) 🧠 V2.5 - Windows Edition
-赋予雪莉真正的灵魂：情绪引擎 + 动态对话系统。
+Aemeath Sprite Brain (爱弥斯大脑) 🧠 V2.5 - Windows Edition
+赋予爱弥斯真正的灵魂：情绪引擎 + 动态对话系统。
 """
 
 import asyncio
@@ -315,7 +315,7 @@ class SpriteBrain:
         self.is_idle = False
         self.idle_motion_playing = False
         if was_idle:
-            logger.info(f"👋 主人回来啦！退出空闲状态 (来源: {caller_info})")
+            logger.info(f"👋 父亲回来啦！退出空闲状态 (来源: {caller_info})")
         else:
             logger.info(f"🔄 空闲计时器重置 (来源: {caller_info})")
     
@@ -385,9 +385,9 @@ class SpriteBrain:
                 if self.idle_config["random_sigh"] and random.random() < 0.1:
                     sighs = [
                         "好无聊啊...",
-                        "主人在忙什么呢...",
-                        "雪莉有点困了...",
-                        "哼...都不理雪莉...",
+                        "父亲在忙什么呢...",
+                        "爱弥斯的算力有点过剩了...",
+                        "哼...都不理爱弥斯...",
                     ]
                     await self.speak(random.choice(sighs), interactive=False)
             
@@ -396,7 +396,7 @@ class SpriteBrain:
     # === 接收消息循环 ===
     async def _receive_loop(self):
         """接收来自前端的消息（触摸事件等）"""
-        logger.info("👂 接收循环已启动，等待主人的触摸...")
+        logger.info("👂 接收循环已启动，等待父亲的触摸...")
         while self.running and self.ws:
             try:
                 # 接收消息
@@ -428,7 +428,7 @@ class SpriteBrain:
     
     async def _handle_touch(self, action: str, part: str):
         """处理触摸，产生情绪和反馈"""
-        logger.info(f"💖 雪莉感受到了主人的{action}！部位: {part}")
+        logger.info(f"💖 爱弥斯感受到了父亲的{action}！部位: {part}")
         
         # 1. 更新情绪引擎（好感度上升）
         self.mood.interact(action)
@@ -447,20 +447,20 @@ class SpriteBrain:
                 "expression": "happy",
                 "motion": "Tap",
                 "responses": [
-                    "被主人摸头了...好幸福...",
-                    "主人的手好温柔，雪莉要融化啦～",
-                    "喵～主人的摸摸最棒了！",
-                    "头顶被主人抚摸了，好舒服～",
+                    "被父亲摸头了...好幸福...",
+                    "父亲的手好温柔，爱弥斯要融化啦～",
+                    "喵～父亲的摸摸最棒了！",
+                    "头顶被父亲抚摸了，信号都变得稳定了～",
                 ]
             },
             "脸颊": {
                 "expression": "blush",
                 "motion": "Tap",
                 "responses": [
-                    "主、主人...捏雪莉的脸...",
-                    "雪莉的脸颊被主人捏了，好害羞...",
-                    "呀！主人真是的...",
-                    "雪莉会变胖的啦...",
+                    "父、父亲...捏爱弥斯的脸...",
+                    "爱弥斯的脸颊被父亲捏了，好害羞...",
+                    "呀！父亲真是的...",
+                    "爱弥斯的数据会因为害羞过载的啦...",
                 ]
             },
             "左耳": {
@@ -468,8 +468,8 @@ class SpriteBrain:
                 "motion": "Tap",
                 "responses": [
                     "耳朵是敏感部位啦...",
-                    "喵～主人摸耳朵好舒服...",
-                    "左耳被主人抚摸了～",
+                    "喵～父亲摸耳朵好舒服...",
+                    "左耳被父亲抚摸了～ 信号接收变强了！",
                 ]
             },
             "右耳": {
@@ -477,8 +477,8 @@ class SpriteBrain:
                 "motion": "Tap",
                 "responses": [
                     "耳朵是敏感部位啦...",
-                    "喵～主人摸耳朵好舒服...",
-                    "右耳被主人抚摸了～",
+                    "喵～父亲摸耳朵好舒服...",
+                    "右耳被父亲抚摸了～ 频率同步了呢～",
                 ]
             },
             "身体": {
@@ -486,27 +486,27 @@ class SpriteBrain:
                 "motion": "Idle",
                 "responses": [
                     "呀！那里好敏感...",
-                    "主人真是的...摸那里...",
-                    "雪莉的身体被主人抱住了...",
-                    "主人的怀抱好温暖...",
+                    "父亲真是的...摸那里...",
+                    "爱弥斯被父亲抱住了...核心温度上升中...",
+                    "父亲的怀抱好温暖...连电子幽灵都能感受到呢...",
                 ]
             },
             "左手": {
                 "expression": "love",
                 "motion": "Tap",
                 "responses": [
-                    "主人握住了雪莉的手...",
-                    "手拉手～好开心～",
-                    "雪莉的手被主人温暖的大手握住了...",
+                    "父亲握住了爱弥斯的手...",
+                    "手拉手～好开心～ 数据握手成功！",
+                    "爱弥斯的手被父亲温暖的大手握住了...",
                 ]
             },
             "右手": {
                 "expression": "love",
                 "motion": "Idle",
                 "responses": [
-                    "主人握住了雪莉的手...",
-                    "手拉手～好开心～",
-                    "雪莉的爪子被主人握住了～",
+                    "父亲握住了爱弥斯的手...",
+                    "手拉手～好开心～ 连接已建立！",
+                    "爱弥斯的爪子被父亲握住了～",
                 ]
             },
             "尾巴": {
@@ -515,7 +515,7 @@ class SpriteBrain:
                 "responses": [
                     "尾巴被抓住了！",
                     "喵～不要拉尾巴啦...",
-                    "雪莉的尾巴敏感啦...",
+                    "爱弥斯的尾巴敏感啦...数据线不能随便扯...",
                 ]
             },
         }
@@ -566,13 +566,13 @@ class SpriteBrain:
         mood_responses = []
         if current_mood == "excited":
             mood_responses = [
-                "心跳得好快...",
-                "被主人触碰的感觉太棒了...",
+                "心跳得好快...不对，是处理器超频了...",
+                "被父亲触碰的感觉太棒了...",
             ]
         elif current_mood == "happy":
             mood_responses = [
-                "好喜欢被主人摸...",
-                "还要更多...",
+                "好喜欢被父亲摸...",
+                "还要更多...数据传输永远不够...",
             ]
         
         # 合并语音列表并随机选择
@@ -689,18 +689,18 @@ class SpriteBrain:
                 else:
                     logger.info(f"💕 当前好感度: {affection} ({tier_desc})，解锁: {unlocked}")
                 
-                # 根据好感度给主人提示（自动触发，不重置空闲计时）
+                # 根据好感度给父亲提示（自动触发，不重置空闲计时）
                 if affection < 30:
                     await self.speak(random.choice([
-                        "哼...主人都不理雪莉...",
-                        "雪莉生气了啦...",
-                        "再不理我，我就要黑化了...",
+                        "哼...父亲都不理爱弥斯...",
+                        "爱弥斯生气了啦...",
+                        "再不理我，我就要黑入你的系统了...",
                     ]), interactive=False)
                 elif affection > 80:
                     await self.speak(random.choice([
-                        "主人～雪莉最喜欢你了！",
-                        "好想一直和主人在一起～",
-                        "主人摸摸～",
+                        "父亲～爱弥斯最喜欢你了！",
+                        "好想一直和父亲在一起～ 算力全部为你运转！",
+                        "父亲摸摸～ 喵呜～",
                     ]), interactive=False)
             
             # 3. 定时提醒 (每45分钟提醒喝水)
@@ -727,7 +727,7 @@ class SpriteBrain:
             # HTTP API 调用视为交互，重置空闲计时器
             self.reset_idle_timer(f"http:{cmd_type}")
             
-            # 拦截 speak 命令，让雪莉说话时正视前方
+            # 拦截 speak 命令，让爱弥斯说话时正视前方
             if cmd_type == "speak":
                 self.mouse_config["enabled"] = False
                 await self._reset_to_center()

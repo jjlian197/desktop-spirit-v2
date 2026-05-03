@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sherry Brain Module 🧠
-赋予雪莉真正的灵魂：情绪引擎 + 动态对话系统
+Aemeath Brain Module 🧠
+赋予爱弥斯真正的灵魂：情绪引擎 + 动态对话系统
 """
 
 from src.brain.sprite_brain import SpriteBrain

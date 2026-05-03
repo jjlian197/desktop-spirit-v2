@@ -76,7 +76,7 @@ class Live2DView(QOpenGLWidget):
     Supports mouse interaction and animation control
     """
     
-    # 🚨 【触觉反馈】触摸事件信号 - 当用户触摸雪莉时发射 (action, part)
+    # 🚨 【触觉反馈】触摸事件信号 - 当用户触摸爱弥斯时发射 (action, part)
     touched = pyqtSignal(str, str)
     # 模型加载完成信号
     model_loaded = pyqtSignal()
@@ -862,7 +862,7 @@ class Live2DView(QOpenGLWidget):
         nx = x / width
         ny = y / height
         
-        # 区域定义 (基于雪莉模型的布局)
+        # 区域定义 (基于爱弥斯模型的布局)
         if ny < 0.25:  # 上半部分 (0-25%)
             if 0.35 < nx < 0.65:
                 return "头顶"

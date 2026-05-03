@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sherry Desktop Sprite - Main Application
-🐱💜 A cute desktop pet powered by Live2D and PyQt6
+Aemeath Desktop Sprite - Main Application
+🐱💜⚡ A cute electronic ghost daughter powered by Live2D and PyQt6
 """
 
 import sys
@@ -122,7 +122,7 @@ def main():
     # Setup logging
     setup_logging()
     
-    logger.info("🐱💜 Starting Sherry Desktop Sprite...")
+    logger.info("🐱💜⚡ Starting Aemeath Desktop Sprite...")
     
     # Create Qt Application
     app = SherryApplication(sys.argv)
@@ -152,7 +152,7 @@ def main():
     
     # 🚨 【触觉反馈】连接触摸事件到 WebSocket 广播
     def on_touch_event(action, part):
-        """当雪莉被触摸时，广播到大脑（线程安全）"""
+        """当爱弥斯被触摸时，广播到大脑（线程安全）"""
         from loguru import logger
         logger.info(f"🔄 转发触摸事件: {action} on {part}")
         # 使用线程安全的广播方法
@@ -163,7 +163,7 @@ def main():
     
     window.touch_event.connect(on_touch_event)
     
-    logger.info("✅ Sherry Desktop Sprite started successfully!")
+    logger.info("✅ Aemeath Desktop Sprite started successfully!")
     logger.info("   WebSocket: ws://127.0.0.1:8765/sprite")
     logger.info("   HTTP API: http://127.0.0.1:8766")
     
@@ -179,7 +179,7 @@ def main():
     ws_server.stop()
     brain_thread.stop()
     brain_thread.wait(2000)  # 等待2秒让大脑优雅退出
-    logger.info("👋 Sherry Desktop Sprite stopped.")
+    logger.info("👋 Aemeath Desktop Sprite stopped.")
     
     return exit_code
 

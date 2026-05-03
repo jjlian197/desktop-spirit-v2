@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
-title Sherry Desktop Sprite - 雪莉桌面精灵
+title Aemeath Desktop Sprite - 爱弥斯桌面精灵
 
 echo.
 echo  ╔═══════════════════════════════════════════════════════════╗
-echo  ║         🐱💜 Sherry Desktop Sprite 雪莉桌面精灵            ║
+echo  ║         🐱💜 Aemeath Desktop Sprite 爱弥斯桌面精灵            ║
 echo  ╚═══════════════════════════════════════════════════════════╝
 echo.
 
@@ -30,7 +30,7 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8765') do (
     timeout /t 1 /nobreak >nul
 )
 
-echo [*] 正在启动 Sherry Desktop Sprite...
+echo [*] 正在启动 Aemeath Desktop Sprite...
 echo [*] 按 Ctrl+C 可以停止程序
 echo.
 
