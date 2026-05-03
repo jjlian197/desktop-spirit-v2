@@ -426,21 +426,21 @@ function resetMorphs() {
 function getFramingOptions() {
   if (bigHead) {
     return {
-      targetHeight: 3.0,
-      targetY: 0.84,
-      cameraY: 0.9,
+      targetHeight: 2.2,
+      targetY: 0.78,
+      cameraY: 0.82,
       lift: 0.04,
-      padding: 0.92,
-      visibleHeightRatio: 0.32,
+      padding: 1.0,
+      visibleHeightRatio: 0.35,
     };
   }
 
   return {
     targetHeight: 2.05,
-      targetY: 0.45,
-    cameraY: 0.48,
+      targetY: 0.52,
+    cameraY: 0.55,
     lift: 0.015,
-    padding: 1.08,
+    padding: 1.0,
     visibleHeightRatio: 1.0,
   };
 }
@@ -482,7 +482,12 @@ function fitObjectToView(object3d) {
   const distance = Math.max(distanceX, distanceY, framedSize.z * 1.4, 2.4);
 
   controls.target.set(0, framedSize.y * options.targetY, 0);
-  camera.position.set(0, framedBox.min.y + framedSize.y * options.cameraY, distance);
+  let camY = framedBox.min.y + framedSize.y * options.cameraY;
+  let camZ = distance;
+  if (bigHead) {
+    camZ = Math.min(camZ * 0.45, 1.8);
+  }
+  camera.position.set(0, camY, camZ);
   camera.near = 0.01;
   camera.far = Math.max(200, distance * 8);
   camera.updateProjectionMatrix();
