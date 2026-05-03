@@ -412,10 +412,54 @@ class VrmView(QWidget):
 
         super().mouseMoveEvent(event)
 
+    def _hit_test(self, x: int, y: int) -> str:
+        """根据点击位置判断触碰部位"""
+        w = self.width()
+        h = self.height()
+        if w == 0 or h == 0:
+            return "身体"
+
+        nx = x / w
+        ny = y / h
+
+        if ny < 0.25:
+            if 0.35 < nx < 0.65:
+                return "头顶"
+            elif nx <= 0.35:
+                return "左耳"
+            else:
+                return "右耳"
+        elif ny < 0.45:
+            if 0.25 < nx < 0.75:
+                return "脸颊"
+            elif nx <= 0.25:
+                return "左耳"
+            else:
+                return "右耳"
+        elif ny < 0.70:
+            if 0.2 < nx < 0.8:
+                return "身体"
+            elif nx <= 0.2:
+                return "左手"
+            else:
+                return "右手"
+        elif ny < 0.85:
+            if nx <= 0.3:
+                return "左手"
+            elif nx >= 0.7:
+                return "右手"
+            else:
+                return "头发"
+        else:
+            return "头发"
+
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton and self._drag_origin is not None:
             if not self._dragging:
-                self.touched.emit("tap", "body")
+                pos = event.position().toPoint()
+                part = self._hit_test(pos.x(), pos.y())
+                self.touched.emit("tap", part)
+                logger.info(f"VRM touch: {part} at ({pos.x()}, {pos.y()})")
             self._drag_origin = None
             self._window_origin = None
             self._dragging = False

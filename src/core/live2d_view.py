@@ -890,9 +890,9 @@ class Live2DView(QOpenGLWidget):
             elif nx >= 0.7:
                 return "右手"
             else:
-                return "尾巴"
+                return "头发"
         else:  # 底部 (85-100%)
-            return "尾巴"
+            return "头发"
     
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton and self.model:
