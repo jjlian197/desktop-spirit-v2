@@ -30,3 +30,10 @@ log/
 build/
 dist/
 *.egg-info/
+
+# Large model files (use Git LFS or external storage)
+*.glb
+*.vrm
+*.blend
+*.pmx
+.tmp/
