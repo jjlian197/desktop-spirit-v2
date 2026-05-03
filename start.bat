@@ -38,8 +38,8 @@ echo.
 python src/main.py
 
 :: 如果程序异常退出，暂停显示错误
+echo.
 if errorlevel 1 (
-    echo.
     echo [错误] 程序异常退出，退出码: %errorlevel%
-    pause
 )
+pause

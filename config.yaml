@@ -58,6 +58,10 @@ tts:
 websocket:
   host: 127.0.0.1
   port: 8765
+stt:
+  enabled: true
+  language: zh
+  energy_threshold: 300
 logging:
   level: INFO
   file: ~/.sherry/sprite.log

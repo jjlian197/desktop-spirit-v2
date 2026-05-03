@@ -834,6 +834,14 @@ class TTSManager(QObject):
         try:
             # Generate audio with translated text
             result = await self.current_provider.speak(translated_text, voice_id)
+
+            # Fallback: if current provider fails, try edge
+            if not result.success and self.current_provider.name != "Edge":
+                fallback = self.providers.get("edge")
+                if fallback and fallback.is_available():
+                    logger.warning(f"⚠️ {self.current_provider.name} failed, falling back to Edge TTS")
+                    self.current_provider = fallback
+                    result = await fallback.speak(translated_text, voice_id)
             
             if not result.success:
                 self.tts_error.emit(result.error or "Unknown TTS error")

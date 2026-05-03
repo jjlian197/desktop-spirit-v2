@@ -44,6 +44,13 @@ try:
 except ImportError:
     HAS_TTS = False
 
+# Import STT Manager
+try:
+    from src.core.stt_manager import STTManager, create_stt_provider
+    HAS_STT = True
+except ImportError:
+    HAS_STT = False
+
 # macOS Native Window Level Support
 HAS_MACOS_LEVEL = False
 if platform.system() == 'Darwin':
@@ -144,6 +151,18 @@ class SherrySpriteWindow(QMainWindow):
                 logger.info("✅ SpriteWindow: TTS manager initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize TTS manager: {e}")
+
+        # Initialize STT manager
+        self.stt_manager = None
+        self._stt_listening = False
+        if HAS_STT:
+            try:
+                self.stt_manager = create_stt_provider(language="zh")
+                self.stt_manager.on_transcript = self._on_stt_transcript
+                self.stt_manager.on_error = self._on_stt_error
+                logger.info("✅ SpriteWindow: STT manager initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize STT manager: {e}")
 
         # Setup window properties
         self._setup_window()
@@ -671,6 +690,31 @@ class SherrySpriteWindow(QMainWindow):
 
         menu.addSeparator()
 
+        # 🎤 语音识别 (STT) 菜单
+        stt_menu = menu.addMenu("🎤 语音识别 (STT)")
+
+        if HAS_STT and self.stt_manager:
+            stt_toggle_action = QAction("🎙️ 开始语音对话", self)
+            stt_toggle_action.setCheckable(True)
+            stt_toggle_action.setChecked(self._stt_listening)
+            stt_toggle_action.triggered.connect(self._toggle_stt_listening)
+            stt_menu.addAction(stt_toggle_action)
+
+            stt_menu.addSeparator()
+
+            stt_lang_menu = stt_menu.addMenu("🌐 识别语言")
+            stt_languages = self.stt_manager.get_available_languages()
+            for lang_code, lang_name in stt_languages.items():
+                action = QAction(f"{lang_name}", self)
+                action.triggered.connect(lambda checked, l=lang_code: self._set_stt_language(l))
+                stt_lang_menu.addAction(action)
+        else:
+            stt_unavailable = QAction("STT 不可用", self)
+            stt_unavailable.setEnabled(False)
+            stt_menu.addAction(stt_unavailable)
+
+        menu.addSeparator()
+
         # 🎙️ TTS Test Menu
         tts_menu = menu.addMenu("🎙️ TTS 设置")
 
@@ -983,6 +1027,112 @@ class SherrySpriteWindow(QMainWindow):
             self.set_background(f"image:{file_path}")
             self.show_message("Background image updated")
 
+    # === 🎤 STT 语音识别相关方法 ===
+
+    def _toggle_stt_listening(self, checked: bool):
+        """切换语音识别监听状态"""
+        logger.info("[STT-UI] _toggle_stt_listening called, checked=%s, HAS_STT=%s, manager=%s",
+                     checked, HAS_STT, self.stt_manager is not None)
+        if not HAS_STT or not self.stt_manager:
+            self.show_message("❌ STT 不可用", 2000)
+            return
+
+        if checked:
+            logger.info("[STT-UI] 调用 start_listening()...")
+            result = self.stt_manager.start_listening()
+            logger.info("[STT-UI] start_listening() 返回: %s", result)
+            if result:
+                self._stt_listening = True
+                self.show_message("🎤 在听你说...", 2000)
+            else:
+                self._stt_listening = False
+                self.show_message("❌ STT 启动失败", 2000)
+        else:
+            logger.info("[STT-UI] 调用 stop_listening()...")
+            self.stt_manager.stop_listening()
+            self._stt_listening = False
+            self.show_message("👋 语音对话已关闭", 2000)
+
+    def _set_stt_language(self, language: str):
+        """设置 STT 识别语言"""
+        if not HAS_STT or not self.stt_manager:
+            return
+        if hasattr(self.stt_manager, 'set_language'):
+            success = self.stt_manager.set_language(language)
+            if success:
+                lang_names = {"zh": "中文", "en": "英文", "ja": "日文", "ko": "韩文"}
+                self.show_message(f"🌐 识别语言: {lang_names.get(language, language)}", 2000)
+
+    def _on_stt_transcript(self, text: str, is_final: bool):
+        """STT 识别到文字后的回调"""
+        if not text or not is_final:
+            return
+
+        logger.info(f"🎤 STT 识别文字: {text}")
+
+        # 检测唤醒词
+        wake_words = ["雪莉", "Sherry", "sherry", "雪梨"]
+        detected_name = None
+        for name in wake_words:
+            if name in text:
+                detected_name = name
+                break
+
+        if not detected_name:
+            return
+
+        logger.info(f"🎤 检测到唤醒词: {detected_name}")
+
+        # 提取唤醒词后面的内容
+        idx = text.find(detected_name)
+        user_text = text[idx + len(detected_name):].lstrip("，,、 ：:")
+
+        if user_text:
+            self._send_voice_to_agent(user_text)
+        else:
+            self._voice_acknowledge()
+
+    def _voice_acknowledge(self):
+        """语音确认：告诉用户听到了"""
+        def delayed_speak():
+            import time
+            time.sleep(0.3)
+            self._do_tts_speak("主人我听到了！")
+        import threading
+        threading.Thread(target=delayed_speak, daemon=True).start()
+
+    def _send_voice_to_agent(self, user_text: str):
+        """发送语音内容并获取响应，通过 TTS 朗读"""
+        def agent_thread():
+            try:
+                logger.info(f"🎤 收到语音: {user_text}")
+                # Windows 版暂无 agent_bridge，直接用 TTS 回复
+                self._do_tts_speak(f"你说了：{user_text}")
+            except Exception as e:
+                logger.error(f"语音处理失败: {e}")
+                self._do_tts_speak("抱歉，出错了")
+        import threading
+        threading.Thread(target=agent_thread, daemon=True).start()
+
+    def _do_tts_speak(self, text: str):
+        """执行 TTS 朗读（线程安全）"""
+        try:
+            if self.tts_manager and HAS_TTS:
+                self.tts_manager.speak_sync(text)
+            else:
+                import pyttsx3
+                engine = pyttsx3.init()
+                engine.say(text)
+                engine.runAndWait()
+        except Exception as e:
+            logger.error(f"TTS 朗读失败: {e}")
+
+    def _on_stt_error(self, error: str):
+        """STT 错误回调"""
+        logger.error(f"🎤 STT 错误: {error}")
+        self.show_message(f"❌ 语音识别错误: {error}", 3000)
+        self._stt_listening = False
+
     def closeEvent(self, event):
         """窗口关闭事件 - 清理资源"""
         logger.info("👋 窗口关闭，清理资源...")
@@ -1002,6 +1152,14 @@ class SherrySpriteWindow(QMainWindow):
                 logger.debug("✅ TTS 管理器已清理")
             except Exception as e:
                 logger.warning(f"清理 TTS 管理器时出错: {e}")
+
+        # 清理 STT 管理器
+        if self.stt_manager:
+            try:
+                self.stt_manager.cleanup()
+                logger.debug("✅ STT 管理器已清理")
+            except Exception as e:
+                logger.warning(f"清理 STT 管理器时出错: {e}")
         
         # 接受关闭事件
         event.accept()
